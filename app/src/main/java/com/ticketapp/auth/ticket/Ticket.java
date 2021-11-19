@@ -128,19 +128,22 @@ public class Ticket {
         String logs = new String( Arrays.copyOfRange(message, 36, 56) );
         Integer counter = Integer.parseInt( new String(Arrays.copyOfRange(message, 60, 64)) );
 
+        boolean issueNewTicket = false;
+
         // step 2: check app tag
-        if ( !appTag.equals(ApplicationTag)){
+        if (appTag.isEmpty()){
+            issueNewTicket = true;
+        }else if ( !appTag.equals(ApplicationTag)){
             infoToShow = "Invalid App tag";
             return false;
         }
 
         // step 3: check the version
-        if ( !version.equals(ApplicationVersion)){
+        if ( !issueNewTicket && !version.equals(ApplicationVersion)){
             infoToShow = "Invalid version. Current version = "+ApplicationVersion;
             return false;
         }
 
-        boolean issueNewTicket = false;
         // step 4 check if there is UID.  if there isn't it's a blank card, ready to be formatted
         if (uid.isEmpty()){
             uid = UUID.randomUUID().toString().substring(0,4);
@@ -161,6 +164,22 @@ public class Ticket {
         )){
             issueNewTicket = false;
             // step 4.3.1 if not expired: add ticket and increase validity time for
+                // a. increase the ticket count
+                ticketCount += uses;
+                System.arraycopy(toBytes(ticketCount), 0, message, 16, 4);
+                // b. increase the validity for
+                validFor += daysValid;
+                System.arraycopy(toBytes(validFor), 0, message, 20, 4);
+
+                //todo: c. recompute the mac
+
+                // d. push
+            res = utils.writePages(message, 0, 26, 16);
+            if (res) {
+                infoToShow = uses + " tickets added.";
+            } else {
+                infoToShow = "Failed to update tickets.";
+            }
 
         }else{
             // step 4.3.2 if expired: issue new tickets with new validity
@@ -171,12 +190,24 @@ public class Ticket {
         if (issueNewTicket){
             // Issuing new ticket
             // a. update the static data
-            // b. update the dynamic data
-            // b.1 replace or clear the first_use field
-            // c. calculate mac for static data
-            // d. write all the data
-        }
+            System.arraycopy( uid.getBytes() , 0, message, 4, 4); // UID
+            System.arraycopy( toBytes(counter), 0, message, 12, 4); // copying card counter to counter state of static memory
+            System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
+            System.arraycopy( toBytes(daysValid), 0, message, 20, 4); // valid for
+            //todo: add mac
 
+            // b. update the dynamic data
+            System.arraycopy( new byte[4] , 0, message, 28, 4); // clear first use
+
+            // d. write all the data
+            res = utils.writePages(message, 0, 26, 16);
+            if (res) {
+                infoToShow = uses + " tickets issued.";
+            } else {
+                infoToShow = "Failed to issue tickets.";
+            }
+
+        }
 
 
         return true;
@@ -249,6 +280,16 @@ public class Ticket {
             return null;
         }
         return dv;
+    }
+
+    private static byte[] toBytes(int i)
+    {
+        byte[] result = new byte[4];
+        result[0] = (byte) (i >> 24);
+        result[1] = (byte) (i >> 16);
+        result[2] = (byte) (i >> 8);
+        result[3] = (byte) (i /*>> 0*/);
+        return result;
     }
 
 }
