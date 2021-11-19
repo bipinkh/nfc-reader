@@ -116,22 +116,28 @@ public class Ticket {
         byte 56 - 59 are lock bits.
         byte 60 - 63 are counter
          */
-        String appTag = new String( Arrays.copyOfRange(message, 0, 4) );
-        String uid = new String( Arrays.copyOfRange(message, 4, 8) );
-        String version = new String( Arrays.copyOfRange(message, 8, 12) );
-        Integer counterState = Integer.parseInt( new String( Arrays.copyOfRange(message, 12, 16) ) );
-        Integer ticketCount = Integer.parseInt( new String( Arrays.copyOfRange(message, 16, 20) ) );
-        Integer validFor = Integer.parseInt( new String( Arrays.copyOfRange(message, 20, 24) ) );
-        String mac = new String( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
-        String firstUse = new String( Arrays.copyOfRange(message, 28, 32) );
-        String lastUse = new String( Arrays.copyOfRange(message, 32, 36) );
-        String logs = new String( Arrays.copyOfRange(message, 36, 56) );
-        Integer counter = Integer.parseInt( new String(Arrays.copyOfRange(message, 60, 64)) );
+        String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
+        String uid = bytesToStr( Arrays.copyOfRange(message, 4, 8) );
+        String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
+        Integer counterState = strToInt( bytesToStr( Arrays.copyOfRange(message, 12, 16) ) );
+        Integer ticketCount = strToInt( bytesToStr( Arrays.copyOfRange(message, 16, 20) ) );
+        Integer validFor = strToInt( bytesToStr( Arrays.copyOfRange(message, 20, 24) ) );
+        String mac = bytesToStr( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
+        String firstUse = bytesToStr( Arrays.copyOfRange(message, 28, 32) );
+        String lastUse = bytesToStr( Arrays.copyOfRange(message, 32, 36) );
+        String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
+        Integer counter = strToInt( bytesToStr(Arrays.copyOfRange(message, 60, 64)) );
 
         boolean issueNewTicket = false;
 
+        System.out.println("Received >>");
+        log(message);
+        System.out.println(" ------------- ");
+        System.out.println(version);
+
+
         // step 2: check app tag
-        if (appTag.isEmpty()){
+        if ( appTag.isEmpty()){
             issueNewTicket = true;
         }else if ( !appTag.equals(ApplicationTag)){
             infoToShow = "Invalid App tag";
@@ -174,10 +180,13 @@ public class Ticket {
                 //todo: c. recompute the mac
 
                 // d. push
+            log(message);
+
             res = utils.writePages(message, 0, 26, 16);
             if (res) {
                 infoToShow = uses + " tickets added.";
             } else {
+                System.out.println( message );
                 infoToShow = "Failed to update tickets.";
             }
 
@@ -190,6 +199,8 @@ public class Ticket {
         if (issueNewTicket){
             // Issuing new ticket
             // a. update the static data
+            System.arraycopy( ApplicationTag.getBytes() , 0, message, 0, 4); // APP TAG
+            System.arraycopy( ApplicationVersion.getBytes() , 0, message, 8, 4); // APP TAG
             System.arraycopy( uid.getBytes() , 0, message, 4, 4); // UID
             System.arraycopy( toBytes(counter), 0, message, 12, 4); // copying card counter to counter state of static memory
             System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
@@ -200,7 +211,9 @@ public class Ticket {
             System.arraycopy( new byte[4] , 0, message, 28, 4); // clear first use
 
             // d. write all the data
-            res = utils.writePages(message, 0, 26, 16);
+            log(message);
+
+            res = utils.writePages(message, 0, 26, 14); // exclude the last 2 page for lock and counter
             if (res) {
                 infoToShow = uses + " tickets issued.";
             } else {
@@ -208,7 +221,6 @@ public class Ticket {
             }
 
         }
-
 
         return true;
     }
@@ -267,9 +279,17 @@ public class Ticket {
         return true;
     }
 
+    private static void log(byte[] str){
+        System.out.println(Arrays.toString(str));
+        for (int i = 0; i < str.length / 4 ; i ++){
+            byte[] bytes = Arrays.copyOfRange(str, i * 4, i * 4 + 4);
+            System.out.println(Arrays.toString(  bytes) + " " + new String(bytes));
+        }
+
+    }
 
     private static Long isValidTime(String timestamp){
-        long dv = Long.valueOf(timestamp)*1000;// its need to be in milisecond
+        long dv = strToInt(timestamp)*1000;// its need to be in milisecond
         Date df = new java.util.Date(dv);
         String vv = new SimpleDateFormat("yyyy-MM-dd").format(df);
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
@@ -281,6 +301,26 @@ public class Ticket {
         }
         return dv;
     }
+
+    private static Integer strToInt(String s){
+        try {
+            return Integer.parseInt(s);
+        }catch (Exception ex){
+            return 0;
+        }
+    }
+
+    private static String bytesToStr(byte [] b) {
+        String s = new String(b);
+        char[] charArray = s.toCharArray();
+        for(char c:charArray) {
+            if(c=='.') continue;
+            if (!Character.isLetterOrDigit(c))
+                return "";
+        }
+        return s;
+    }
+
 
     private static byte[] toBytes(int i)
     {
