@@ -6,8 +6,11 @@ import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
 import java.security.GeneralSecurityException;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * TODO:
@@ -27,6 +30,8 @@ public class Ticket {
 
     public static byte[] data = new byte[192];
 
+    private static String ApplicationTag = "BpAl";
+    private static String ApplicationVersion = "v1.0";
     private static TicketMac macAlgorithm; // For computing HMAC over ticket data, as needed
     private static Utilities utils;
     private static Commands ul;
@@ -84,57 +89,95 @@ public class Ticket {
         }
 
         /**
-         * page 6: number of tickets
-         * page 7: validity time unit (day or min)
-         * page 8 and 9: first use timestamp
+         *
+            byte[] existingData = new byte[16];
+            res = utils.writePages(existingData, 0, 6, 4);
+            if (res) {
+                infoToShow = "Read & Write commands to page 6.";
+            } else {
+                infoToShow = "Failed to read and write";
+            }
          */
-        byte[] existingData = new byte[16];
-        res = utils.readPages(6, 4, existingData, 0);
+        infoToShow = "Issue method words.";
 
-        // first 4 bytes (1 page) is ticket number
-        Integer ticketNumber = 0;
-        Integer validityTimeUnit = daysValid;
+        //todo: use key diversification
+        //todo: change the key
 
-        try {
-            ticketNumber = Integer.valueOf( new String(Arrays.copyOfRange(existingData, 0, 4) ) );
-        }catch (NumberFormatException ignore){ }
-
-
-        if (ticketNumber > 0){
-            byte[] command = new byte[8];
-            ticketNumber += uses;
-            // second 4 bytes (1 page) is validity time unit
-            Integer existingValidity = Integer.valueOf( new String(Arrays.copyOfRange(existingData, 4, 8) ) );
-            validityTimeUnit += existingValidity;
-
-            byte[] timeBytes = String.format("%04d", ticketNumber).getBytes();
-            System.arraycopy( timeBytes, 0, command, 0, 4 );
-
-            timeBytes = String.format("%04d", validityTimeUnit).getBytes();
-            System.arraycopy( timeBytes, 0, command, 4, 4 );
-            //submit
-            res = utils.writePages(command, 0, 6, 2);
-
-            // last 8 bytes (2 pages) is first time ticket issue timestamp
-            //Long firstUseTimeStr = Long.valueOf( new String(Arrays.copyOfRange(existingData, 8, 16) ) );
-            //Date firstUseTime = new Date(firstUseTimeStr*1000);
-
-        }else {
-            byte[] command = new byte[16];
-            byte[] timeBytes = String.format("%04d", uses).getBytes();
-            System.arraycopy( timeBytes, 0, command, 0, 4 );
-            timeBytes = String.format("%04d", validityTimeUnit).getBytes();
-            System.arraycopy( timeBytes, 0, command, 4, 4 );
-            //submit
-            res = utils.writePages(command, 0, 6, 4);
-        }
-
-        // Set information to show for the user
+        // step 1: read from page 26 to 41
+        byte[] message = new byte[64];
+        res = utils.readPages(26, 16, message, 0);
         if (res) {
-            infoToShow = "Read & Write commands to page 6.";
+            infoToShow = "Read: " + new String(message);
         } else {
-            infoToShow = "Failed to read and write";
+            infoToShow = "Failed to read";
         }
+
+        /*
+        byte 56 - 59 are lock bits.
+        byte 60 - 63 are counter
+         */
+        String appTag = new String( Arrays.copyOfRange(message, 0, 4) );
+        String uid = new String( Arrays.copyOfRange(message, 4, 8) );
+        String version = new String( Arrays.copyOfRange(message, 8, 12) );
+        Integer counterState = Integer.parseInt( new String( Arrays.copyOfRange(message, 12, 16) ) );
+        Integer ticketCount = Integer.parseInt( new String( Arrays.copyOfRange(message, 16, 20) ) );
+        Integer validFor = Integer.parseInt( new String( Arrays.copyOfRange(message, 20, 24) ) );
+        String mac = new String( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
+        String firstUse = new String( Arrays.copyOfRange(message, 28, 32) );
+        String lastUse = new String( Arrays.copyOfRange(message, 32, 36) );
+        String logs = new String( Arrays.copyOfRange(message, 36, 56) );
+        Integer counter = Integer.parseInt( new String(Arrays.copyOfRange(message, 60, 64)) );
+
+        // step 2: check app tag
+        if ( !appTag.equals(ApplicationTag)){
+            infoToShow = "Invalid App tag";
+            return false;
+        }
+
+        // step 3: check the version
+        if ( !version.equals(ApplicationVersion)){
+            infoToShow = "Invalid version. Current version = "+ApplicationVersion;
+            return false;
+        }
+
+        boolean issueNewTicket = false;
+        // step 4 check if there is UID.  if there isn't it's a blank card, ready to be formatted
+        if (uid.isEmpty()){
+            uid = UUID.randomUUID().toString().substring(0,4);
+            issueNewTicket = true;
+        }
+
+        // todo: step 4.2 if not blank and MAC unmatches: abort
+
+        // step 4.3 if not blank and MAC matches: check ticket is expired or not
+        long currentTime = new Date().getTime();
+        long validityDuration = 1000 * 86400 * validFor;
+        Long firstUseTimestamp = isValidTime(firstUse);
+        if ( !issueNewTicket && (
+                firstUse.isEmpty()
+                        && firstUseTimestamp != null
+                        && currentTime < (firstUseTimestamp + validityDuration)
+                && ( ticketCount+counter >= counter )
+        )){
+            issueNewTicket = false;
+            // step 4.3.1 if not expired: add ticket and increase validity time for
+
+        }else{
+            // step 4.3.2 if expired: issue new tickets with new validity
+            issueNewTicket = true;
+        }
+
+
+        if (issueNewTicket){
+            // Issuing new ticket
+            // a. update the static data
+            // b. update the dynamic data
+            // b.1 replace or clear the first_use field
+            // c. calculate mac for static data
+            // d. write all the data
+        }
+
+
 
         return true;
     }
@@ -155,17 +198,57 @@ public class Ticket {
             return false;
         }
 
-        // Example of reading:
+        /*
         byte[] message = new byte[4];
         res = utils.readPages(6, 1, message, 0);
-
-        // Set information to show for the user
         if (res) {
             infoToShow = "Read: " + new String(message);
         } else {
             infoToShow = "Failed to read";
         }
+        */
+        infoToShow = "Validate method works";
+
+        // step 1: read from page 6 to 19
+
+        // step 2: check app tag
+
+        // step 3: check the version
+
+        // step 3.1 if app tag or version does not match, abort.
+
+        // step 4 check if there is UID. if not, abort.
+
+        // step 5: check MAC. if it doesn't match, abort.
+
+        // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
+
+        // step 7: check the time. if expired, abot. or, if it is first use, first_use = blank
+            // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
+            // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
+
+        // step 8: update dynamic data ( last_used, logs)
+
+        // todo: check if 2 WRITES can be merged to 1.
+
+        // todo: use two dynamic data block for odd/even counter.
 
         return true;
     }
+
+
+    private static Long isValidTime(String timestamp){
+        long dv = Long.valueOf(timestamp)*1000;// its need to be in milisecond
+        Date df = new java.util.Date(dv);
+        String vv = new SimpleDateFormat("yyyy-MM-dd").format(df);
+        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
+        dateFormat.setLenient(false);
+        try {
+            dateFormat.parse(vv.trim());
+        } catch (ParseException pe) {
+            return null;
+        }
+        return dv;
+    }
+
 }
