@@ -5,6 +5,7 @@ import com.ticketapp.auth.app.main.TicketActivity;
 import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
+import java.math.BigInteger;
 import java.security.GeneralSecurityException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -119,22 +120,23 @@ public class Ticket {
         String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
         String uid = bytesToStr( Arrays.copyOfRange(message, 4, 8) );
         String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
-        Integer counterState = strToInt( bytesToStr( Arrays.copyOfRange(message, 12, 16) ) );
-        Integer ticketCount = strToInt( bytesToStr( Arrays.copyOfRange(message, 16, 20) ) );
-        Integer validFor = strToInt( bytesToStr( Arrays.copyOfRange(message, 20, 24) ) );
+        Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
+        Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
+        Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
         String mac = bytesToStr( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
-        String firstUse = bytesToStr( Arrays.copyOfRange(message, 28, 32) );
-        String lastUse = bytesToStr( Arrays.copyOfRange(message, 32, 36) );
+        Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
+        Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
         String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
-        Integer counter = strToInt( bytesToStr(Arrays.copyOfRange(message, 60, 64)) );
+        Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
 
         boolean issueNewTicket = false;
 
+        /*
         System.out.println("Received >>");
         log(message);
         System.out.println(" ------------- ");
         System.out.println(version);
-
+*/
 
         // step 2: check app tag
         if ( appTag.isEmpty()){
@@ -162,24 +164,23 @@ public class Ticket {
         long currentTime = new Date().getTime();
         long validityDuration = 1000 * 86400 * validFor;
         Long firstUseTimestamp = isValidTime(firstUse);
-        if ( !issueNewTicket && (
-                firstUse.isEmpty()
-                        && firstUseTimestamp != null
-                        && currentTime < (firstUseTimestamp + validityDuration)
-                && ( ticketCount+counter >= counter )
-        )){
+
+        if ( !issueNewTicket && firstUseTimestamp == null){
+            System.out.println("Adding new tickets because previous tickets aren't used.");
             issueNewTicket = false;
             // step 4.3.1 if not expired: add ticket and increase validity time for
-                // a. increase the ticket count
-                ticketCount += uses;
-                System.arraycopy(toBytes(ticketCount), 0, message, 16, 4);
-                // b. increase the validity for
-                validFor += daysValid;
-                System.arraycopy(toBytes(validFor), 0, message, 20, 4);
+            // a. increase the ticket count
+            System.out.println("Ticket count before " + ticketCount);
+            ticketCount += uses;
+            System.out.println("Ticket count after " + ticketCount);
+            System.arraycopy(toBytes(ticketCount), 0, message, 16, 4);
+            // b. increase the validity for
+            validFor += daysValid;
+            System.arraycopy(toBytes(validFor), 0, message, 20, 4);
 
-                //todo: c. recompute the mac
+            //todo: c. recompute the mac
 
-                // d. push
+            // d. push
             log(message);
 
             res = utils.writePages(message, 0, 26, 16);
@@ -189,9 +190,36 @@ public class Ticket {
                 System.out.println( message );
                 infoToShow = "Failed to update tickets.";
             }
+            return true;
+        }
 
+        if ( !issueNewTicket && currentTime < (firstUseTimestamp + validityDuration) && ( ticketCount+counter >= counter )){
+            System.out.println("Adding new tickets on top of non-expired tickets.");
+            issueNewTicket = false;
+            // step 4.3.1 if not expired: add ticket and increase validity time for
+            // a. increase the ticket count
+            ticketCount += uses;
+            System.arraycopy(toBytes(ticketCount), 0, message, 16, 4);
+            // b. increase the validity for
+            validFor += daysValid;
+            System.arraycopy(toBytes(validFor), 0, message, 20, 4);
+
+            //todo: c. recompute the mac
+
+            // d. push
+            log(message);
+
+            res = utils.writePages(message, 0, 26, 16);
+            if (res) {
+                infoToShow = uses + " tickets added.";
+            } else {
+                System.out.println( message );
+                infoToShow = "Failed to update tickets.";
+            }
+            return true;
         }else{
             // step 4.3.2 if expired: issue new tickets with new validity
+            System.out.println("Issuing new tickets because previous tickets expired.");
             issueNewTicket = true;
         }
 
@@ -283,13 +311,14 @@ public class Ticket {
         System.out.println(Arrays.toString(str));
         for (int i = 0; i < str.length / 4 ; i ++){
             byte[] bytes = Arrays.copyOfRange(str, i * 4, i * 4 + 4);
-            System.out.println(Arrays.toString(  bytes) + " " + new String(bytes));
+            System.out.println(Arrays.toString(  bytes) + " " + bytesToStr(bytes));
         }
 
     }
 
-    private static Long isValidTime(String timestamp){
-        long dv = strToInt(timestamp)*1000;// its need to be in milisecond
+    private static Long isValidTime(Integer timestamp){
+        long dv = timestamp*1000;// its need to be in milisecond
+        if (dv == 0) return null;
         Date df = new java.util.Date(dv);
         String vv = new SimpleDateFormat("yyyy-MM-dd").format(df);
         SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
@@ -302,9 +331,9 @@ public class Ticket {
         return dv;
     }
 
-    private static Integer strToInt(String s){
+    private static Integer bytesToInt(byte[] b){
         try {
-            return Integer.parseInt(s);
+            return new BigInteger(b).intValue();
         }catch (Exception ex){
             return 0;
         }
