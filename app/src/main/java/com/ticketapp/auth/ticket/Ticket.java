@@ -24,7 +24,9 @@ public class Ticket {
 
     /** Default keys are stored in res/values/secrets.xml **/
     private static final byte[] defaultAuthenticationKey = TicketActivity.outer.getString(R.string.default_auth_key).getBytes();
+    private static final byte[] ourAuthenticationKey = TicketActivity.outer.getString(R.string.default_auth_key_our).getBytes();
     private static final byte[] defaultHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key).getBytes();
+    private static final byte[] ourHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key_our).getBytes();
 
     /** TODO: Change these according to your design. Diversify the keys. */
     private static final byte[] authenticationKey = defaultAuthenticationKey; // 16-byte key
@@ -72,6 +74,19 @@ public class Ticket {
     /** After validation/issuing, get information */
     public static String getInfoToShow() {
         return infoToShow;
+    }
+
+
+    public boolean formatKeys(){
+        // Authenticate
+        boolean res = utils.authenticate(authenticationKey);
+        if (!res) {
+            Utilities.log("Authentication failed in format()", true);
+            infoToShow = "Authentication failed in format";
+            return false;
+        }
+        System.arraycopy( defaultHMACKey , 0, message, 0, 4); // APP TAG
+
     }
 
     /**
