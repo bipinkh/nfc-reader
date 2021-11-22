@@ -29,8 +29,8 @@ public class Ticket {
     private static final byte[] ourHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key_our).getBytes();
 
     /** TODO: Change these according to your design. Diversify the keys. */
-    private static final byte[] authenticationKey = defaultAuthenticationKey; // 16-byte key
-    private static final byte[] hmacKey = defaultHMACKey; // 16-byte key
+    private static final byte[] authenticationKey = ourAuthenticationKey; // 16-byte key
+    private static final byte[] hmacKey = ourHMACKey; // 16-byte key
 
     public static byte[] data = new byte[192];
 
@@ -77,35 +77,35 @@ public class Ticket {
     }
 
 
-    public boolean formatKeys(){
-        // Authenticate
+    public boolean authenticateKeys(){
         boolean res = utils.authenticate(authenticationKey);
+        if (res) return true;
+        // Authenticate with default key
+        res = utils.authenticate(defaultAuthenticationKey);
         if (!res) {
             Utilities.log("Authentication failed in format()", true);
-            infoToShow = "Authentication failed in format";
             return false;
         }
-        System.arraycopy( defaultHMACKey , 0, message, 0, 4); // APP TAG
 
+        res = utils.writePages(authenticationKey, 0, 44, 4);
+        if (res) {
+            Utilities.log("Keys updated", false);
+            return true;
+        } else {
+            Utilities.log("Failed to update keys", true);
+            return false;
+        }
     }
 
     /**
      * Issue new tickets
      *
-     * TODO: IMPLEMENT
      */
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
         boolean res;
 
         // Authenticate
-        res = utils.authenticate(authenticationKey);
-        if (!res) {
-            Utilities.log("Authentication failed in issue()", true);
-            infoToShow = "Authentication failed";
-            return false;
-        }
-
-        infoToShow = "Issue method words.";
+        if (!authenticateKeys()) return false;
 
         //todo: use key diversification
         //todo: change the key
@@ -306,7 +306,7 @@ public class Ticket {
         //todo: step 5: check MAC. if it doesn't match, abort.
 
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
-        if ( (counter - counterState - ticketCount ) <= 0){
+        if ( ( ticketCount - (counter - counterState) ) <= 0){
             infoToShow = "No tickets";
             return false;
         }
@@ -315,13 +315,13 @@ public class Ticket {
             // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
             // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
         long validityDuration = 1000 * 86400 * validFor;
-        long currentDate = new Date().getTime();
+        long currentDate = System.currentTimeMillis();
         if (firstUse != 0 && ( currentDate - firstUse * 1000) < validityDuration ){
             infoToShow = "Tickets expired timewise";
             return false;
         }else if (firstUse == 0){
-            System.arraycopy( ByteBuffer.allocate(4).putLong(currentDate / 1000).array(), 0, message, 28, 4); // first use
-            System.arraycopy( ByteBuffer.allocate(4).putLong(currentDate / 1000).array(), 0, message, 32, 4); // last use
+            System.arraycopy( timestampToByteArray(currentDate), 0, message, 28, 4); // first use
+            System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
             System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
             res = utils.writePages(message, 0, 26, 16);
             if (res) {
@@ -337,7 +337,7 @@ public class Ticket {
                 return false;
             }else {
                 //todo: logos
-                System.arraycopy( ByteBuffer.allocate(4).putLong(currentDate / 1000).array(), 0, message, 32, 4); // last use
+                System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
                 System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
                 res = utils.writePages(message, 0, 26, 16);
                 if (res) {
@@ -348,6 +348,17 @@ public class Ticket {
                 return true;
             }
         }
+    }
+
+    private static byte[] timestampToByteArray(long timestamp){
+        int unixTime = (int)(timestamp / 1000);
+        return new byte[]{
+                (byte) (unixTime >> 24),
+                (byte) (unixTime >> 16),
+                (byte) (unixTime >> 8),
+                (byte) unixTime
+
+        };
     }
 
     private static void log(byte[] str){
