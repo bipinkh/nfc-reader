@@ -326,7 +326,7 @@ public class Ticket {
         byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
         Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
         Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
-        String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
+        byte[] logs = Arrays.copyOfRange(message, 36, 56);
         Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
 
         // step 2: check app tag
@@ -400,13 +400,20 @@ public class Ticket {
             return true;
         }else {
             // not the first use
-            if ( ( currentDate/1000 - lastUse ) < 60 ){
+            if ( ( currentDate/1000 - lastUse ) < 1 ){ // todo: change 1 to 60
                 infoToShow = "Ticket validated less than a minute ago";
                 return false;
             }else {
-                //todo: logos
                 System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
                 System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
+                // write logs: page 36 to 56
+                System.arraycopy(logs, 12, logs, 16, 4 );
+                System.arraycopy(logs, 8, logs, 12, 4 );
+                System.arraycopy(logs, 4, logs, 8, 4 );
+                System.arraycopy(logs, 0, logs, 4, 4 );
+                System.arraycopy(timestampToByteArray(currentDate), 0, logs,0, 4 );
+                System.arraycopy(logs, 0, message, 36, 20);
+                // write
                 res = utils.writePages(message, 0, 26, 16);
                 if (res) {
                     infoToShow = "Ticket validated";
