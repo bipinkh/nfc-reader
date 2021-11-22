@@ -8,6 +8,7 @@ import com.ticketapp.auth.app.ulctools.Utilities;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -96,6 +97,15 @@ public class Ticket {
         }
     }
 
+    private void cleanup(){
+        boolean res = utils.writePages(new byte[64], 0, 26, 14);
+        if (res) {
+            infoToShow = "Cleaned up";
+        } else {
+            infoToShow = "Fail to clean up";
+        }
+    }
+
     /**
      * Issue new tickets
      *
@@ -105,8 +115,6 @@ public class Ticket {
 
         // Authenticate
         if (!authenticateKeys()) return false;
-
-        //todo: use key diversification
 
         // step 1: read from page 26 to 41
         byte[] message = new byte[64];
@@ -153,9 +161,11 @@ public class Ticket {
             checkMac = false;
         }
 
-        byte[] staticData = Arrays.copyOfRange(message, 0, 24);
-        byte[] newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-        System.arraycopy(newMac, 0, message, 24, 4);
+        // key diversification
+        macAlgorithm.setKey( generatehash(new String(ourHMACKey), uid) );
+
+        byte[] staticData;
+        byte[] newMac;
 
         // step 4.2 if not blank and MAC unmatches: abort
         if (checkMac){
@@ -205,7 +215,7 @@ public class Ticket {
             // d. push
             log(message);
 
-            res = utils.writePages(message, 0, 26, 16);
+            res = utils.writePages(message, 0, 26, 14);
             if (res) {
                 infoToShow = uses + " tickets added.";
             } else {
@@ -234,7 +244,7 @@ public class Ticket {
             // d. push
             log(message);
 
-            res = utils.writePages(message, 0, 26, 16);
+            res = utils.writePages(message, 0, 26, 14);
             if (res) {
                 infoToShow = uses + " tickets added.";
             } else {
@@ -253,7 +263,7 @@ public class Ticket {
             // Issuing new ticket
             // a. update the static data
             System.arraycopy( ApplicationTag.getBytes() , 0, message, 0, 4); // APP TAG
-            System.arraycopy( ApplicationVersion.getBytes() , 0, message, 8, 4); // APP TAG
+            System.arraycopy( ApplicationVersion.getBytes() , 0, message, 8, 4); // APP version
             System.arraycopy( uid.getBytes() , 0, message, 4, 4); // UID
             System.arraycopy( toBytes(counter), 0, message, 12, 4); // copying card counter to counter state of static memory
             System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
@@ -261,7 +271,7 @@ public class Ticket {
             // add mac
             staticData = Arrays.copyOfRange(message, 0, 24);
             newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-            System.arraycopy(newMac, 0, message, 24, 28);
+            System.arraycopy(newMac, 0, message, 24, 4);
 
             // b. update the dynamic data
             System.arraycopy( new byte[4] , 0, message, 28, 4); // clear first use
@@ -280,6 +290,8 @@ public class Ticket {
 
         return true;
     }
+
+
 
     /**
      * Use ticket once
@@ -312,7 +324,7 @@ public class Ticket {
         Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
         Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
         Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
-        String mac = bytesToStr( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
+        byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
         Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
         Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
         String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
@@ -336,7 +348,31 @@ public class Ticket {
            return false;
         }
 
-        //todo: step 5: check MAC. if it doesn't match, abort.
+        // key diversification
+        macAlgorithm.setKey( generatehash(new String(ourHMACKey), uid) );
+
+        // step 4.2 if not blank and MAC unmatches: abort
+        byte[] staticData;
+        boolean emptyMac = true;
+
+        for (byte b : mac) {
+            if (b != 0) {
+                emptyMac = false;
+                break;
+            }
+        }
+        if (emptyMac){
+            infoToShow = "Empty MAC";
+            return false;
+        }
+        staticData = Arrays.copyOfRange(message, 0, 24);
+        byte[] computedMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+        if (!Arrays.equals(mac, computedMac)){
+            infoToShow = "Wrong MAC";
+            return false;
+        }
+
+
 
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
         if ( ( ticketCount - (counter - counterState) ) <= 0){
@@ -446,6 +482,17 @@ public class Ticket {
         result[2] = (byte) (i >> 8);
         result[3] = (byte) (i /*>> 0*/);
         return result;
+    }
+
+    private static byte[] generatehash(String masterKey, String uid){
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest((masterKey+uid).getBytes());
+            return Arrays.copyOfRange(hash,0,16);
+        }catch (Exception ex){
+            return null;
+        }
+
     }
 
 }
