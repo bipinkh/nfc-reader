@@ -15,7 +15,6 @@ import java.util.Date;
 import java.util.UUID;
 
 /**
- * TODO:
  * Complete the implementation of this class. Most of the code are already implemented. You
  * will need to change the keys, design and implement functions to issue and validate tickets. Keep
  * you code readable and write clarifying comments when necessary.
@@ -108,7 +107,6 @@ public class Ticket {
         if (!authenticateKeys()) return false;
 
         //todo: use key diversification
-        //todo: change the key
 
         // step 1: read from page 26 to 41
         byte[] message = new byte[64];
@@ -125,13 +123,14 @@ public class Ticket {
         Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
         Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
         Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
-        String mac = bytesToStr( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
+        byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
         Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
         Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
         String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
         Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
 
         boolean issueNewTicket = false;
+        boolean checkMac = true;
 
         // step 2: check app tag
         if ( appTag.isEmpty()){
@@ -151,9 +150,34 @@ public class Ticket {
         if (uid.isEmpty()){
             uid = UUID.randomUUID().toString().substring(0,4);
             issueNewTicket = true;
+            checkMac = false;
         }
 
-        // todo: step 4.2 if not blank and MAC unmatches: abort
+        byte[] staticData = Arrays.copyOfRange(message, 0, 24);
+        byte[] newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+        System.arraycopy(newMac, 0, message, 24, 4);
+
+        // step 4.2 if not blank and MAC unmatches: abort
+        if (checkMac){
+            boolean emptyMac = true;
+            for (byte b : mac) {
+                if (b != 0) {
+                    emptyMac = false;
+                    break;
+                }
+            }
+            if (emptyMac){
+                infoToShow = "Empty MAC";
+                return false;
+            }
+            staticData = Arrays.copyOfRange(message, 0, 24);
+            byte[] computedMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+            if (!Arrays.equals(mac, computedMac)){
+                infoToShow = "Wrong MAC";
+                return false;
+            }
+        }
+
 
         // step 4.3 if not blank and MAC matches: check ticket is expired or not
         long currentTime = new Date().getTime();
@@ -173,7 +197,10 @@ public class Ticket {
             validFor += daysValid;
             System.arraycopy(toBytes(validFor), 0, message, 20, 4);
 
-            //todo: c. recompute the mac
+            //c. recompute the mac
+            staticData = Arrays.copyOfRange(message, 0, 24);
+            newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+            System.arraycopy(newMac, 0, message, 24, 4);
 
             // d. push
             log(message);
@@ -199,7 +226,10 @@ public class Ticket {
             validFor += daysValid;
             System.arraycopy(toBytes(validFor), 0, message, 20, 4);
 
-            //todo: c. recompute the mac
+            //c. recompute the mac
+            staticData = Arrays.copyOfRange(message, 0, 24);
+            newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+            System.arraycopy(newMac, 0, message, 24, 4);
 
             // d. push
             log(message);
@@ -228,7 +258,10 @@ public class Ticket {
             System.arraycopy( toBytes(counter), 0, message, 12, 4); // copying card counter to counter state of static memory
             System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
             System.arraycopy( toBytes(daysValid), 0, message, 20, 4); // valid for
-            //todo: add mac
+            // add mac
+            staticData = Arrays.copyOfRange(message, 0, 24);
+            newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+            System.arraycopy(newMac, 0, message, 24, 28);
 
             // b. update the dynamic data
             System.arraycopy( new byte[4] , 0, message, 28, 4); // clear first use

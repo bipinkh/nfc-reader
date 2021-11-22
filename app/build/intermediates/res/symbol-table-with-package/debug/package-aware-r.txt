@@ -243,7 +243,9 @@ string cbar_menu_title
 string console_btn_archive
 string console_hint
 string default_auth_key
+string default_auth_key_our
 string default_hmac_key
+string default_hmac_key_our
 string default_key
 string issue_mode
 string key_in_use
