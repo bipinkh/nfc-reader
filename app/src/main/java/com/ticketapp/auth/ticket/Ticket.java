@@ -6,6 +6,7 @@ import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -89,16 +90,6 @@ public class Ticket {
             return false;
         }
 
-        /**
-         *
-            byte[] existingData = new byte[16];
-            res = utils.writePages(existingData, 0, 6, 4);
-            if (res) {
-                infoToShow = "Read & Write commands to page 6.";
-            } else {
-                infoToShow = "Failed to read and write";
-            }
-         */
         infoToShow = "Issue method words.";
 
         //todo: use key diversification
@@ -113,10 +104,6 @@ public class Ticket {
             infoToShow = "Failed to read";
         }
 
-        /*
-        byte 56 - 59 are lock bits.
-        byte 60 - 63 are counter
-         */
         String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
         String uid = bytesToStr( Arrays.copyOfRange(message, 4, 8) );
         String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
@@ -130,13 +117,6 @@ public class Ticket {
         Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
 
         boolean issueNewTicket = false;
-
-        /*
-        System.out.println("Received >>");
-        log(message);
-        System.out.println(" ------------- ");
-        System.out.println(version);
-*/
 
         // step 2: check app tag
         if ( appTag.isEmpty()){
@@ -256,7 +236,6 @@ public class Ticket {
     /**
      * Use ticket once
      *
-     * TODO: IMPLEMENT
      */
     public boolean use() throws GeneralSecurityException {
         boolean res;
@@ -269,42 +248,91 @@ public class Ticket {
             return false;
         }
 
-        /*
-        byte[] message = new byte[4];
-        res = utils.readPages(6, 1, message, 0);
+
+        // step 1: read from page 26 to 41
+        byte[] message = new byte[64];
+        res = utils.readPages(26, 16, message, 0);
         if (res) {
             infoToShow = "Read: " + new String(message);
         } else {
             infoToShow = "Failed to read";
         }
-        */
-        infoToShow = "Validate method works";
 
-        // step 1: read from page 6 to 19
+        String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
+        String uid = bytesToStr( Arrays.copyOfRange(message, 4, 8) );
+        String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
+        Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
+        Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
+        Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
+        String mac = bytesToStr( Arrays.copyOfRange(message, 24, 28) ); // first 4 byte
+        Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
+        Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
+        String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
+        Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
 
         // step 2: check app tag
+        if ( appTag.isEmpty() || !appTag.equals(ApplicationTag)){
+            infoToShow = "Invalid App tag";
+            return false;
+        }
 
         // step 3: check the version
+        if ( version.isEmpty() || !version.equals(ApplicationVersion)){
+            infoToShow = "Invalid version. Current version = "+ApplicationVersion;
+            return false;
+        }
 
-        // step 3.1 if app tag or version does not match, abort.
+        // step 4 check if there is UID.  if there isn't it's a blank card, ready to be formatted
+        if (uid.isEmpty()){
+           infoToShow = "Empty UID";
+           return false;
+        }
 
-        // step 4 check if there is UID. if not, abort.
-
-        // step 5: check MAC. if it doesn't match, abort.
+        //todo: step 5: check MAC. if it doesn't match, abort.
 
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
+        if ( (counter - counterState - ticketCount ) <= 0){
+            infoToShow = "No tickets";
+            return false;
+        }
 
-        // step 7: check the time. if expired, abot. or, if it is first use, first_use = blank
+        // step 7: check the time. if expired, abort. or, if it is first use, first_use = now
             // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
             // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
-
-        // step 8: update dynamic data ( last_used, logs)
-
-        // todo: check if 2 WRITES can be merged to 1.
-
-        // todo: use two dynamic data block for odd/even counter.
-
-        return true;
+        long validityDuration = 1000 * 86400 * validFor;
+        long currentDate = new Date().getTime();
+        if (firstUse != 0 && ( currentDate - firstUse * 1000) < validityDuration ){
+            infoToShow = "Tickets expired timewise";
+            return false;
+        }else if (firstUse == 0){
+            System.arraycopy( ByteBuffer.allocate(4).putLong(currentDate / 1000).array(), 0, message, 28, 4); // first use
+            System.arraycopy( ByteBuffer.allocate(4).putLong(currentDate / 1000).array(), 0, message, 32, 4); // last use
+            System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
+            res = utils.writePages(message, 0, 26, 16);
+            if (res) {
+                infoToShow = "Ticket validated";
+            } else {
+                infoToShow = "Failed to validate ticket.";
+            }
+            return true;
+        }else {
+            // not the first use
+            if ( ( currentDate/1000 - lastUse ) < 60 ){
+                infoToShow = "Ticket validated less than a minute ago";
+                return false;
+            }else {
+                //todo: logos
+                System.arraycopy( ByteBuffer.allocate(4).putLong(currentDate / 1000).array(), 0, message, 32, 4); // last use
+                System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
+                res = utils.writePages(message, 0, 26, 16);
+                if (res) {
+                    infoToShow = "Ticket validated";
+                } else {
+                    infoToShow = "Failed to validate ticket.";
+                }
+                return true;
+            }
+        }
     }
 
     private static void log(byte[] str){
