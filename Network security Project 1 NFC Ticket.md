@@ -27,6 +27,44 @@ Here we outline the purpose of each page in the memory that are used by our appl
 - page 41: **Counter**, it is a one way 16-bit counter that we use to count the tickets as they are used.
 
 ### Issuing tickets
+###### Algorithm explanation
+
+In order to issue tickets and/or format new cards, we use the `issue() ` function available in the file `/app/src/main/java/com/ticketapp/auth/ticket/Ticket.java` .The algorithm works as follows:
+
+1. We first authenticate the card using our own custom method `boolean authenticateKeys()`. [1] If the authentication fails, than `issue()` fails.
+2. Secondly, we read the data that is written in the NFC card and then we parse it accordingly
+3. We create two flag booleans, their names explain their purpose: `issueNewTicket` and `checkMac`
+4. We check if the application tag is present in the card; if it is **not** present, then we have to issue a new ticket, otherwise we check if the tag is equal to the expected one. If it is **not** the value we expect, `issue()` fails.
+
+[1] This is the code and explanation for `authenticateKeys()`:
+
+```java
+public boolean authenticateKeys(){
+        boolean res = utils.authenticate(authenticationKey);
+        if (res) return true;
+        // Authenticate with default key
+        res = utils.authenticate(defaultAuthenticationKey);
+        if (!res) {
+            Utilities.log("Authentication failed in format()", true);
+            return false;
+        }
+
+        res = utils.writePages(authenticationKey, 0, 44, 4);
+        if (res) {
+            Utilities.log("Keys updated", false);
+            return true;
+        } else {
+            Utilities.log("Failed to update keys", true);
+            return false;
+        }
+    }
+```
+
+- The method first tries to authenticate the card with the authentication key using the provided method from the utils module. 
+  - If the authentication succeeds, return true
+  - if the authentication does not succeed, then the method tries to authenticate using the default key for the NFC card
+    - If the authentication succeeds, then the method writes the key into the NFC card since we have a new blank card
+    - Else the method fails since the card has a key that our application does not recognise
 
 **Add flowcharts to explain the algorithm**
 
