@@ -28,7 +28,6 @@ public class Ticket {
     private static final byte[] defaultHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key).getBytes();
     private static final byte[] ourHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key_our).getBytes();
 
-    /** TODO: Change these according to your design. Diversify the keys. */
     private static final byte[] authenticationKey = ourAuthenticationKey; // 16-byte key
     private static final byte[] hmacKey = ourHMACKey; // 16-byte key
 
@@ -44,10 +43,13 @@ public class Ticket {
     private final int remainingUses = 0;
     private final int expiryTime = 0;
 
+    private static byte[] counterIncrementBy1 = new byte[4];
+
     private static String infoToShow = ""; // Use this to show messages
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
+        counterIncrementBy1[3] = 1;
         // Set HMAC key for the ticket
         macAlgorithm = new TicketMac();
         macAlgorithm.setKey(hmacKey);
@@ -294,7 +296,6 @@ public class Ticket {
 
     /**
      * Use ticket once
-     *
      */
     public boolean use() throws GeneralSecurityException {
         boolean res;
@@ -360,6 +361,7 @@ public class Ticket {
                 break;
             }
         }
+
         if (emptyMac){
             infoToShow = "Empty MAC";
             return false;
@@ -374,7 +376,8 @@ public class Ticket {
 
 
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
-        if ( ( ticketCount - (counter - counterState) ) <= 0){
+        int remainingTickets = ticketCount - (counter - counterState);
+        if ( remainingTickets <= 0){
             infoToShow = "No tickets";
             return false;
         }
@@ -382,26 +385,24 @@ public class Ticket {
         // step 7: check the time. if expired, abort. or, if it is first use, first_use = now
             // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
             // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
-        long validityDuration = 1000 * 86400 * validFor;
-        long currentDate = System.currentTimeMillis();
+        Long validityDuration = 1000L * 86400L * validFor;
+        Long currentDate = System.currentTimeMillis();
         if (firstUse != 0 && ( currentDate - firstUse * 1000) < validityDuration ){
             infoToShow = "Tickets expired timewise";
             return false;
-        }else if (firstUse == 0){
+        }else if (counterState.equals(counter)){
             System.arraycopy( timestampToByteArray(currentDate), 0, message, 28, 4); // first use
             System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
-            System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
+            System.arraycopy( counterIncrementBy1, 0, message, 60, 4); // counter increment by 1
             res = utils.writePages(message, 0, 26, 16);
-            if (res) {
-                infoToShow = "Ticket validated";
-            } else {
-                infoToShow = "Failed to validate ticket.";
-            }
+            //res = utils.writePages(counterIncrementBy1, 0, 41, 1);
+            if (res) infoToShow = "Ticket validated (1). \n"+remainingTickets + " tickets remaining.\nExpires on: " + new Date( currentDate + validityDuration ) ;
+            else infoToShow = "Failed to validate ticket.";
             return true;
         }else {
             // not the first use
-            if ( ( currentDate/1000 - lastUse ) < 1 ){ // todo: change 1 to 60
-                infoToShow = "Ticket validated less than a minute ago";
+            if ( ( currentDate/1000 - lastUse ) < 10 ){
+                infoToShow = "Ticket validated less than 10 seconds ago";
                 return false;
             }else {
                 System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
@@ -413,26 +414,23 @@ public class Ticket {
                 System.arraycopy(logs, 0, logs, 4, 4 );
                 System.arraycopy(timestampToByteArray(currentDate), 0, logs,0, 4 );
                 System.arraycopy(logs, 0, message, 36, 20);
+                System.arraycopy( counterIncrementBy1, 0, message, 60, 4); // counter increment by 1
                 // write
                 res = utils.writePages(message, 0, 26, 16);
-                if (res) {
-                    infoToShow = "Ticket validated";
-                } else {
-                    infoToShow = "Failed to validate ticket.";
-                }
+                if (res) infoToShow = "Ticket validated (2). \n"+remainingTickets + " tickets remaining.\nExpires on: " + new Date( firstUse + validityDuration );
+                else infoToShow = "Failed to validate ticket.";
                 return true;
             }
         }
     }
 
     private static byte[] timestampToByteArray(long timestamp){
-        int unixTime = (int)(timestamp / 1000);
+        int unixTime = (int)(timestamp);
         return new byte[]{
                 (byte) (unixTime >> 24),
                 (byte) (unixTime >> 16),
                 (byte) (unixTime >> 8),
                 (byte) unixTime
-
         };
     }
 
