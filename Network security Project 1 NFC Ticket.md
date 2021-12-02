@@ -30,7 +30,7 @@ Here we outline the purpose of each page in the memory that are used by our appl
 
 ###### Algorithm explanation
 
-In order to issue tickets and/or format new cards, we use the `issue() ` function available in the file `/app/src/main/java/com/ticketapp/auth/ticket/Ticket.java` .The algorithm works as follows:
+In order to issue tickets and/or format new cards, we use the `issue() ` function available in the file `/app/src/main/java/com/ticketapp/auth/ticket/Ticket.java` . The algorithm works as follows:
 
 1. We first authenticate the card using our own custom method `boolean authenticateKeys()`. [1] If the authentication fails, than `issue()` fails.
 2. Secondly, we read the data that is written in the NFC card and then we parse it accordingly
