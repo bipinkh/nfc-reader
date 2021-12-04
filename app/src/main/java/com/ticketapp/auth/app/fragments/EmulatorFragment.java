@@ -118,7 +118,7 @@ public class EmulatorFragment extends Fragment {
                 }
                 ticket_info.setText(Ticket.getInfoToShow());
             } catch (GeneralSecurityException g) {
-                Log.d("Error", g.toString());
+                 Log.d("Error", g.toString());
             }
             Reader.disconnect();
         }

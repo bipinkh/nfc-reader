@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.UUID;
 
@@ -42,14 +43,16 @@ public class Ticket {
     private final Boolean isValid = false;
     private final int remainingUses = 0;
     private final int expiryTime = 0;
+    private final int secondUseTime = 1; // time in seconds to wait before 2nd use
 
-    private static byte[] counterIncrementBy1 = new byte[4];
+    private static byte[] counterIncrementBy1 = {1,0,0,0};
+    private static byte[] empty4Bytes = {0,0,0,0};
 
     private static String infoToShow = ""; // Use this to show messages
+    private static Boolean formatCard = false;
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
-        counterIncrementBy1[3] = 1;
         // Set HMAC key for the ticket
         macAlgorithm = new TicketMac();
         macAlgorithm.setKey(hmacKey);
@@ -102,17 +105,23 @@ public class Ticket {
     private void cleanup(){
         boolean res = utils.writePages(new byte[64], 0, 26, 14);
         if (res) {
-            infoToShow = "Cleaned up";
+            infoToShow = "Formatted the card";
         } else {
-            infoToShow = "Fail to clean up";
+            infoToShow = "Fail to format card";
         }
     }
+
 
     /**
      * Issue new tickets
      *
      */
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
+        if (formatCard){
+            cleanup();
+            return true;
+        }
+
         boolean res;
 
         // Authenticate
@@ -130,14 +139,17 @@ public class Ticket {
         String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
         String uid = bytesToStr( Arrays.copyOfRange(message, 4, 8) );
         String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
-        Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
+        byte[] counterStateBytes = Arrays.copyOfRange(message, 12, 16);
+        Integer counterState = bytesToInt( counterStateBytes );
         Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
         Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
         byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
-        Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
-        Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
+        Date firstUse = bytesToDate( Arrays.copyOfRange(message, 28, 32) );
+        Date lastUse = bytesToDate( Arrays.copyOfRange(message, 32, 36) );
         String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
-        Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
+        byte[] counterBytes = Arrays.copyOfRange(message, 60, 64);
+        reverseByteArray(counterBytes);
+        Integer counter = bytesToInt( counterBytes );
 
         boolean issueNewTicket = false;
         boolean checkMac = true;
@@ -192,13 +204,10 @@ public class Ticket {
 
 
         // step 4.3 if not blank and MAC matches: check ticket is expired or not
-        long currentTime = new Date().getTime();
-        long validityDuration = 1000 * 86400 * validFor;
-        Long firstUseTimestamp = isValidTime(firstUse);
+        long validityDurationInSec =  86400 * validFor; // changing days to seconds
 
-        if ( !issueNewTicket && firstUseTimestamp == null){
+        if ( !issueNewTicket && firstUse == null){
             System.out.println("Adding new tickets because previous tickets aren't used.");
-            issueNewTicket = false;
             // step 4.3.1 if not expired: add ticket and increase validity time for
             // a. increase the ticket count
             System.out.println("Ticket count before " + ticketCount);
@@ -227,7 +236,11 @@ public class Ticket {
             return true;
         }
 
-        if ( !issueNewTicket && currentTime < (firstUseTimestamp + validityDuration) && ( ticketCount+counter >= counter )){
+        if (
+                !issueNewTicket
+                && new Date(firstUse.getTime() + validityDurationInSec * 1000).after(new Date()) // expiry time is after current time
+                && ( ticketCount+counterState >= counter ) // there is some tickets remaining
+        ){
             System.out.println("Adding new tickets on top of non-expired tickets.");
             issueNewTicket = false;
             // step 4.3.1 if not expired: add ticket and increase validity time for
@@ -243,7 +256,10 @@ public class Ticket {
             newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
             System.arraycopy(newMac, 0, message, 24, 4);
 
-            // d. push
+            // d. clear first use
+            System.arraycopy( empty4Bytes , 0, message, 28, 4); // clear first use
+
+            // e. push
             log(message);
 
             res = utils.writePages(message, 0, 26, 14);
@@ -254,42 +270,33 @@ public class Ticket {
                 infoToShow = "Failed to update tickets.";
             }
             return true;
-        }else{
-            // step 4.3.2 if expired: issue new tickets with new validity
-            System.out.println("Issuing new tickets because previous tickets expired.");
-            issueNewTicket = true;
         }
 
+        // Issuing new ticket
+        System.out.println("Issuing new tickets because previous tickets expired.");
 
-        if (issueNewTicket){
-            // Issuing new ticket
-            // a. update the static data
-            System.arraycopy( ApplicationTag.getBytes() , 0, message, 0, 4); // APP TAG
-            System.arraycopy( ApplicationVersion.getBytes() , 0, message, 8, 4); // APP version
-            System.arraycopy( uid.getBytes() , 0, message, 4, 4); // UID
-            System.arraycopy( toBytes(counter), 0, message, 12, 4); // copying card counter to counter state of static memory
-            System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
-            System.arraycopy( toBytes(daysValid), 0, message, 20, 4); // valid for
-            // add mac
-            staticData = Arrays.copyOfRange(message, 0, 24);
-            newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-            System.arraycopy(newMac, 0, message, 24, 4);
+        // a. update the static data
+        System.arraycopy( ApplicationTag.getBytes() , 0, message, 0, 4); // APP TAG
+        System.arraycopy( ApplicationVersion.getBytes() , 0, message, 8, 4); // APP version
+        System.arraycopy( uid.getBytes() , 0, message, 4, 4); // UID
+        System.arraycopy( counterBytes, 0, message, 12, 4); // copying card counter to counter state of static memory
+        System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
+        System.arraycopy( toBytes(daysValid), 0, message, 20, 4); // valid for
+        // add mac
+        staticData = Arrays.copyOfRange(message, 0, 24);
+        newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+        System.arraycopy(newMac, 0, message, 24, 4);
 
-            // b. update the dynamic data
-            System.arraycopy( new byte[4] , 0, message, 28, 4); // clear first use
+        // b. update the dynamic data
+        System.arraycopy( empty4Bytes , 0, message, 28, 4); // clear first use
+        System.arraycopy( empty4Bytes , 0, message, 32, 4); // clear last use
 
-            // d. write all the data
-            log(message);
+        // d. write all the data
+        log(message);
 
-            res = utils.writePages(message, 0, 26, 14); // exclude the last 2 page for lock and counter
-            if (res) {
-                infoToShow = uses + " tickets issued.";
-            } else {
-                infoToShow = "Failed to issue tickets.";
-            }
-
-        }
-
+        res = utils.writePages(message, 0, 26, 14); // exclude the last 2 page for lock and counter
+        if (res) infoToShow = uses + " new tickets issued.";
+        else infoToShow = "Failed to issue tickets.";
         return true;
     }
 
@@ -318,17 +325,21 @@ public class Ticket {
             infoToShow = "Failed to read";
         }
 
+        // starting from page 26
         String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
         String uid = bytesToStr( Arrays.copyOfRange(message, 4, 8) );
         String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
-        Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
+        byte[] counterStateBytes = Arrays.copyOfRange(message, 12, 16);
+        Integer counterState = bytesToInt( counterStateBytes );
         Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
         Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
         byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
-        Integer firstUse = bytesToInt( Arrays.copyOfRange(message, 28, 32) );
-        Integer lastUse = bytesToInt( Arrays.copyOfRange(message, 32, 36) );
+        Date firstUse = bytesToDate( Arrays.copyOfRange(message, 28, 32) );
+        Date lastUse = bytesToDate( Arrays.copyOfRange(message, 32, 36) );
         byte[] logs = Arrays.copyOfRange(message, 36, 56);
-        Integer counter = bytesToInt( Arrays.copyOfRange(message, 60, 64));
+        byte[] counterBytes = Arrays.copyOfRange(message, 60, 64);
+        reverseByteArray(counterBytes);
+        Integer counter = bytesToInt( counterBytes );
 
         // step 2: check app tag
         if ( appTag.isEmpty() || !appTag.equals(ApplicationTag)){
@@ -344,8 +355,8 @@ public class Ticket {
 
         // step 4 check if there is UID.  if there isn't it's a blank card, ready to be formatted
         if (uid.isEmpty()){
-           infoToShow = "Empty UID";
-           return false;
+            infoToShow = "Empty UID";
+            return false;
         }
 
         // key diversification
@@ -373,8 +384,6 @@ public class Ticket {
             return false;
         }
 
-
-
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
         int remainingTickets = ticketCount - (counter - counterState);
         if ( remainingTickets <= 0){
@@ -383,56 +392,56 @@ public class Ticket {
         }
 
         // step 7: check the time. if expired, abort. or, if it is first use, first_use = now
-            // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
-            // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
-        Long validityDuration = 1000L * 86400L * validFor;
-        Long currentDate = System.currentTimeMillis();
-        if (firstUse != 0 && ( currentDate - firstUse * 1000) < validityDuration ){
+        // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
+        // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
+        long validityDurationInMillis = 1000L * 86400L * validFor;
+        long currentDateInMillis = System.currentTimeMillis();
+        if (firstUse != null && new Date(firstUse.getTime() + validityDurationInMillis).before(new Date()) ){
             infoToShow = "Tickets expired timewise";
             return false;
-        }else if (counterState.equals(counter)){
-            System.arraycopy( timestampToByteArray(currentDate), 0, message, 28, 4); // first use
-            System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
+        }else if (counterState.equals(counter)){ // "counter state == counter" means the first use
+            firstUse = new Date(currentDateInMillis);
+            lastUse = firstUse;
+            System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
+            System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last ue
             System.arraycopy( counterIncrementBy1, 0, message, 60, 4); // counter increment by 1
             res = utils.writePages(message, 0, 26, 16);
             //res = utils.writePages(counterIncrementBy1, 0, 41, 1);
-            if (res) infoToShow = "Ticket validated (1). \n"+remainingTickets + " tickets remaining.\nExpires on: " + new Date( currentDate + validityDuration ) ;
+            if (res) infoToShow = "Ticket validated (1st use). \n"+remainingTickets + " tickets remaining.\nExpires on: " + new Date( currentDateInMillis + validityDurationInMillis ) ;
             else infoToShow = "Failed to validate ticket.";
             return true;
         }else {
             // not the first use
-            if ( ( currentDate/1000 - lastUse ) < 10 ){
-                infoToShow = "Ticket validated less than 10 seconds ago";
+            if ( lastUse != null && (currentDateInMillis- lastUse.getTime())/1000 < secondUseTime ){
+                infoToShow = "Ticket validated less than " + secondUseTime + " seconds ago";
                 return false;
             }else {
-                System.arraycopy( timestampToByteArray(currentDate), 0, message, 32, 4); // last use
+                lastUse = new Date(currentDateInMillis);
+                if (firstUse == null){
+                    firstUse = lastUse;
+                    System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
+                }
+                System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
                 System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
                 // write logs: page 36 to 56
                 System.arraycopy(logs, 12, logs, 16, 4 );
                 System.arraycopy(logs, 8, logs, 12, 4 );
                 System.arraycopy(logs, 4, logs, 8, 4 );
                 System.arraycopy(logs, 0, logs, 4, 4 );
-                System.arraycopy(timestampToByteArray(currentDate), 0, logs,0, 4 );
+                System.arraycopy(toBytes(lastUse), 0, logs,0, 4 );
                 System.arraycopy(logs, 0, message, 36, 20);
                 System.arraycopy( counterIncrementBy1, 0, message, 60, 4); // counter increment by 1
                 // write
                 res = utils.writePages(message, 0, 26, 16);
-                if (res) infoToShow = "Ticket validated (2). \n"+remainingTickets + " tickets remaining.\nExpires on: " + new Date( firstUse + validityDuration );
-                else infoToShow = "Failed to validate ticket.";
+                if (res) {
+                    infoToShow = "Ticket validated. \n"+remainingTickets + " tickets remaining." +
+                            "\nExpires on: " + new Date( firstUse.getTime() + validityDurationInMillis );
+                } else infoToShow = "Failed to validate ticket.";
                 return true;
             }
         }
     }
 
-    private static byte[] timestampToByteArray(long timestamp){
-        int unixTime = (int)(timestamp);
-        return new byte[]{
-                (byte) (unixTime >> 24),
-                (byte) (unixTime >> 16),
-                (byte) (unixTime >> 8),
-                (byte) unixTime
-        };
-    }
 
     private static void log(byte[] str){
         System.out.println(Arrays.toString(str));
@@ -443,26 +452,43 @@ public class Ticket {
 
     }
 
-    private static Long isValidTime(Integer timestamp){
-        long dv = timestamp*1000;// its need to be in milisecond
-        if (dv == 0) return null;
-        Date df = new java.util.Date(dv);
-        String vv = new SimpleDateFormat("yyyy-MM-dd").format(df);
-        SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd");
-        dateFormat.setLenient(false);
+    private static Date bytesToDate(byte[] b){
         try {
-            dateFormat.parse(vv.trim());
-        } catch (ParseException pe) {
+            Date d = null;
+            int bInt = 0;
+            if (b.length == 4){
+                byte[] b8 = new byte[8];
+                System.arraycopy(b, 0, b8, 4, 4);
+                bInt = bytesToInt(b8);
+            }else bInt = bytesToInt(b);
+            if (bInt <= 0) return null;
+            return new Date(bInt*1000L);
+        }catch (Exception ex){
             return null;
         }
-        return dv;
     }
 
     private static Integer bytesToInt(byte[] b){
         try {
-            return new BigInteger(b).intValue();
+            return new BigInteger( b ).intValue();
         }catch (Exception ex){
             return 0;
+        }
+    }
+
+    public static void reverseByteArray(byte[] array) {
+        if (array == null) {
+            return;
+        }
+        int i = 0;
+        int j = array.length - 1;
+        byte tmp;
+        while (j > i) {
+            tmp = array[j];
+            array[j] = array[i];
+            array[i] = tmp;
+            j--;
+            i++;
         }
     }
 
@@ -478,14 +504,17 @@ public class Ticket {
     }
 
 
-    private static byte[] toBytes(int i)
-    {
-        byte[] result = new byte[4];
-        result[0] = (byte) (i >> 24);
-        result[1] = (byte) (i >> 16);
-        result[2] = (byte) (i >> 8);
-        result[3] = (byte) (i /*>> 0*/);
-        return result;
+    public byte[] toBytes(Date d) {
+        long l = d.getTime() / 1000; // converting to seconds
+        ByteBuffer buffer = ByteBuffer.allocate(8);
+        buffer.putLong(l);
+        return Arrays.copyOfRange(buffer.array(), 4, buffer.array().length); // only the last 4 bytes
+    }
+
+    private static byte[] toBytes(int i) {
+        ByteBuffer buffer = ByteBuffer.allocate(4);
+        buffer.putInt(i);
+        return buffer.array();
     }
 
     private static byte[] generatehash(String masterKey, String uid){
