@@ -102,7 +102,7 @@ public class Ticket {
         }
     }
 
-    private void cleanup(){
+    private void formatCard(){
         boolean res = utils.writePages(new byte[64], 0, 26, 14);
         if (res) {
             infoToShow = "Formatted the card";
@@ -118,7 +118,7 @@ public class Ticket {
      */
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
         if (formatCard){
-            cleanup();
+            formatCard();
             return true;
         }
 
