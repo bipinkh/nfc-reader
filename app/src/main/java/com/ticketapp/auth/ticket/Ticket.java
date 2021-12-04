@@ -80,15 +80,17 @@ public class Ticket {
 
 
     public boolean authenticateKeys(){
+        // first, try to authenticate with our key
         boolean res = utils.authenticate(authenticationKey);
         if (res) return true;
-        // Authenticate with default key
+        // if authenticating with our key fails, authenticate with default key
         res = utils.authenticate(defaultAuthenticationKey);
         if (!res) {
+            // if authenticating with default key also fails, then abort
             Utilities.log("Authentication failed in format()", true);
             return false;
         }
-
+        // if authenticating with default key works, change the authentication key to ours
         res = utils.writePages(authenticationKey, 0, 44, 4);
         if (res) {
             Utilities.log("Keys updated", false);
@@ -99,6 +101,11 @@ public class Ticket {
         }
     }
 
+
+    /**
+     * Function to format the card. Used during debugging when we had to reset all the data fields.
+     * Can also be used when the card format functionality is added to the card later.
+     */
     private void formatCard(){
         boolean res = utils.writePages(new byte[64], 0, 26, 14);
         if (res) {
@@ -111,7 +118,6 @@ public class Ticket {
 
     /**
      * Issue new tickets
-     *
      */
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
         if (formatCard){
