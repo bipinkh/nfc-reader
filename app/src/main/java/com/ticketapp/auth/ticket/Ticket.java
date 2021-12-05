@@ -12,7 +12,6 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
-import java.util.UUID;
 
 /**
  * Complete the implementation of this class. Most of the code are already implemented. You
@@ -140,7 +139,7 @@ public class Ticket {
         // Authenticate
         if (!authenticateKeys()) return false;
 
-        // step 1: read from page 26 to 41
+        // step 1: read from page 26 to 41  [26:39 user memory, 40: lock bytes, 41: counter]
         byte[] message = new byte[64];
         res = utils.readPages(26, 16, message, 0);
         if (res) infoToShow = "Read memory. Processing data. ";
@@ -157,8 +156,6 @@ public class Ticket {
         int validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
         byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
         Date firstUse = bytesToDate( Arrays.copyOfRange(message, 28, 32) );
-        //Date lastUse = bytesToDate( Arrays.copyOfRange(message, 32, 36) );
-        //String logs = bytesToStr( Arrays.copyOfRange(message, 36, 56) );
         byte[] counterBytes = Arrays.copyOfRange(message, 60, 64);
         reverseByteArray(counterBytes);
         Integer counter = bytesToInt( counterBytes );
@@ -211,38 +208,13 @@ public class Ticket {
 
         // step 4.3 if not blank and MAC matches: check ticket is expired or not
         long validityDurationInSec =  86400L * validFor; // changing days to seconds
-
-        if ( !issueNewTicket && firstUse == null){
-            System.out.println("Adding new tickets because previous tickets aren't used.");
-            // step 4.3.1 if not expired: add ticket and increase validity time for
-            // a. increase the ticket count
-            System.out.println("Ticket count before " + ticketCount);
-            ticketCount += uses;
-            System.out.println("Ticket count after " + ticketCount);
-            System.arraycopy(toBytes(ticketCount), 0, message, 16, 4);
-            // b. increase the validity for
-            validFor += daysValid;
-            System.arraycopy(toBytes(validFor), 0, message, 20, 4);
-
-            //c. recompute the mac
-            staticData = Arrays.copyOfRange(message, 0, 24);
-            newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-            System.arraycopy(newMac, 0, message, 24, 4);
-
-            // d. push
-            res = utils.writePages(message, 0, 26, 14);
-            if (res) infoToShow = uses + " tickets added over "+ (ticketCount - uses) +" unused tickets.";
-            else infoToShow = "Failed to update tickets.";
-            return true;
-        }
-
         int previousRemainingTickets = Math.max(0, ticketCount + counterState - counter);
-        if (
-                !issueNewTicket
-                && new Date(firstUse.getTime() + validityDurationInSec * 1000).after(new Date()) // expiry time is after current time
-                && ( previousRemainingTickets > 0 ) // there is some tickets remaining
-        ){
-            System.out.println("Adding new tickets on top of non-expired tickets.");
+        boolean hasNonExpiredPreviousTickets = !issueNewTicket && firstUse == null; // if there is no first use at all
+        if (!hasNonExpiredPreviousTickets){ // if the previous tickets is used, there may be some tickets non-expired.
+            hasNonExpiredPreviousTickets = !issueNewTicket && ( previousRemainingTickets > 0 )
+                    && new Date(firstUse.getTime() + validityDurationInSec * 1000).after(new Date()); // expiry time is after current time
+        }
+        if (hasNonExpiredPreviousTickets){
             // step 4.3.1 if not expired: add ticket and increase validity time for
             // a. increase the ticket count
             ticketCount += uses;
@@ -259,12 +231,21 @@ public class Ticket {
             // d. clear first use
             System.arraycopy( empty4Bytes , 0, message, 28, 4); // clear first use
 
-            // e. push
+            // e. push.
+            /*
+            since we changed pages (16-20) for ticketcount, (20-24) for validFor, (24-28) for static mac,
+            (28-32) for first use, we just write these pages only and ignore update of other page.
+             */
             res = utils.writePages(message, 0, 26, 14);
-            if (res) infoToShow = uses + " tickets added over "+ previousRemainingTickets +" non-expired tickets.";
-            else infoToShow = "Failed to update tickets.";
+            if (res){
+                infoToShow = uses + " tickets added over "+ previousRemainingTickets +" non-expired tickets.";
+            } else{
+                infoToShow = "Failed to update tickets.";
+                return false;
+            }
             return true;
         }
+
 
         // Issuing new ticket
         System.out.println("Issuing new tickets because previous tickets expired.");
