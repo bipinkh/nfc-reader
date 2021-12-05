@@ -87,7 +87,7 @@ public class Ticket {
         res = utils.authenticate(defaultAuthenticationKey);
         if (!res) {
             // if authenticating with default key also fails, then abort
-            Utilities.log("Authentication failed in format()", true);
+            Utilities.log("Authentication failed", true);
             return false;
         }
         // if authenticating with default key works, change the authentication key to ours
@@ -137,7 +137,10 @@ public class Ticket {
         }
 
         // Authenticate
-        if (!authenticateKeys()) return false;
+        if (!authenticateKeys()){
+            infoToShow = "Authentication failed";
+            return false;
+        }
 
         // step 1: read from page 26 to 41  [26:39 user memory, 40: lock bytes, 41: counter]
         byte[] message = new byte[64];
@@ -292,23 +295,18 @@ public class Ticket {
             return false;
         }
 
-
         // Authenticate
-        res = utils.authenticate(authenticationKey);
-        if (!res) {
-            Utilities.log("Authentication failed in issue()", true);
+        if (!authenticateKeys()){
             infoToShow = "Authentication failed";
             return false;
         }
 
-
         // step 1: read from page 26 to 41
         byte[] message = new byte[64];
         res = utils.readPages(26, 16, message, 0);
-        if (res) {
-            infoToShow = "Read: " + new String(message);
-        } else {
+        if (!res) {
             infoToShow = "Failed to read";
+            return false;
         }
 
         // starting from page 26
