@@ -235,8 +235,10 @@ public class Ticket {
             /*
             since we changed pages (16-20) for ticketcount, (20-24) for validFor, (24-28) for static mac,
             (28-32) for first use, we just write these pages only and ignore update of other page.
+            start page = 30, and page count = 4)
              */
-            res = utils.writePages(message, 0, 26, 14);
+            byte[] toWrite = Arrays.copyOfRange(message, 16,32);
+            res = utils.writePages(toWrite, 0, 30, 4);
             if (res){
                 infoToShow = uses + " tickets added over "+ previousRemainingTickets +" non-expired tickets.";
             } else{
@@ -380,17 +382,25 @@ public class Ticket {
         if (firstUse != null && new Date(firstUse.getTime() + validityDurationInMillis).before(new Date()) ){
             infoToShow = "Tickets expired timewise";
             return false;
-        }else if (counterState.equals(counter)){ // "counter state == counter" means the first use
+        }else if (counterState.equals(counter)){ // means the first use
             firstUse = new Date(currentDateInMillis);
             lastUse = firstUse;
             System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
-            System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last ue
-            System.arraycopy( counterIncrementBy1, 0, message, 60, 4); // counter increment by 1
-            res = utils.writePages(message, 0, 26, 16);
-            //res = utils.writePages(counterIncrementBy1, 0, 41, 1);
-            if (res) infoToShow = "Ticket validated (1st use). \n"+ (remainingTickets-1) + " tickets remaining.\nExpires on: " + new Date( currentDateInMillis + validityDurationInMillis ) ;
-            else infoToShow = "Failed to validate ticket.";
+            System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
+            res = utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 ); // 26 + (28/4)
+            if (!res){
+                infoToShow = "Failed to validate ticket.";
+                return false;
+            }
+            // increase the counter
+            res = utils.writePages(counterIncrementBy1, 0, 41, 1);
+            if (!res){
+                infoToShow = "Failed to validate ticket.";
+                return false;
+            }
+            infoToShow = "Ticket validated (1st use). \n"+ (remainingTickets-1) + " tickets remaining.\nExpires on: " + new Date( currentDateInMillis + validityDurationInMillis ) ;
             return true;
+
         }else {
             // not the first use
             if ( lastUse != null && (currentDateInMillis- lastUse.getTime())/1000 < secondUseTime ){
@@ -403,21 +413,30 @@ public class Ticket {
                     System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
                 }
                 System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
-                System.arraycopy( ByteBuffer.allocate(4).putInt(1).array(), 0, message, 60, 4); // counter increment by 1
-                // write logs: page 36 to 56
-                System.arraycopy(logs, 12, logs, 16, 4 );
-                System.arraycopy(logs, 8, logs, 12, 4 );
-                System.arraycopy(logs, 4, logs, 8, 4 );
-                System.arraycopy(logs, 0, logs, 4, 4 );
-                System.arraycopy(toBytes(lastUse), 0, logs,0, 4 );
-                System.arraycopy(logs, 0, message, 36, 20);
-                System.arraycopy( counterIncrementBy1, 0, message, 60, 4); // counter increment by 1
-                // write
-                res = utils.writePages(message, 0, 26, 16);
-                if (res) {
-                    infoToShow = "Ticket validated. \n"+ (remainingTickets-1) + " tickets remaining." +
+
+                // update the first and last use
+                res = utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 ); // 26 + (28/4)
+                if (!res){
+                    infoToShow = "Failed to validate ticket.";
+                    return false;
+                }
+
+                // increase the counter
+                res = utils.writePages(counterIncrementBy1, 0, 41, 1);
+                if (!res){
+                    infoToShow = "Failed to validate ticket.";
+                    return false;
+                }
+
+                /*
+                there are 5 logs (each 4 bytes) from page 35 to 39 in the card's user memory.
+                each new log will replace the oldest log from these pages, so index of new log = (counter%5)+42
+                 */
+                int pageToUpdate = (counter % 5) + 35;
+                utils.writePages( toBytes(lastUse), 0, pageToUpdate, 1);
+
+                infoToShow = "Ticket validated. \n"+ (remainingTickets-1) + " tickets remaining." +
                             "\nExpires on: " + new Date( firstUse.getTime() + validityDurationInMillis );
-                } else infoToShow = "Failed to validate ticket.";
                 return true;
             }
         }
