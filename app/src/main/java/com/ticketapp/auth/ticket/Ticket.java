@@ -5,6 +5,8 @@ import com.ticketapp.auth.app.main.TicketActivity;
 import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
@@ -25,16 +27,10 @@ public class Ticket {
     /** Default keys are stored in res/values/secrets.xml **/
     private static final byte[] defaultAuthenticationKey = TicketActivity.outer.getString(R.string.default_auth_key).getBytes();
     private static final byte[] ourAuthenticationKey = TicketActivity.outer.getString(R.string.default_auth_key_our).getBytes();
-    private static final byte[] defaultHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key).getBytes();
     private static final byte[] ourHMACKey = TicketActivity.outer.getString(R.string.default_hmac_key_our).getBytes();
-
-    private static final byte[] authenticationKey = ourAuthenticationKey; // 16-byte key
-    private static final byte[] hmacKey = ourHMACKey; // 16-byte key
-
-    public static byte[] data = new byte[192];
-
     private static String ApplicationTag = "BpAl";
     private static String ApplicationVersion = "v1.0";
+
     private static TicketMac macAlgorithm; // For computing HMAC over ticket data, as needed
     private static Utilities utils;
     private static Commands ul;
@@ -43,20 +39,20 @@ public class Ticket {
     private final int remainingUses = 0;
     private final int expiryTime = 0;
     private final int waitingSecondsBetweenTwoTicketIssues = 5; // time in seconds to wait before 2nd use
+    private static Boolean formatCard = false; /// !!! WARNING !!! This variable is set true only during development, to format card. Set it false in production
+    private static String infoToShow = ""; // Use this to show messages
+    DateFormat dateFormatter = new SimpleDateFormat("yyyy-mm-dd hh:mm:ss");
+
 
     private static final byte[] counterIncrementBy1 = {1,0,0,0};
     private static final byte[] empty4Bytes = {0,0,0,0};
 
-    private static String infoToShow = ""; // Use this to show messages
-    private static Boolean formatCard = false;
-
-    DateFormat dateFormatter = new SimpleDateFormat("yyyy-mm-dd hh:mm:ss");
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
         // Set HMAC key for the ticket
         macAlgorithm = new TicketMac();
-        macAlgorithm.setKey(hmacKey);
+        macAlgorithm.setKey(ourHMACKey);
 
         ul = new Commands();
         utils = new Utilities(ul);
@@ -85,7 +81,7 @@ public class Ticket {
 
     public boolean authenticateKeys(){
         // first, try to authenticate with our key
-        boolean res = utils.authenticate(authenticationKey);
+        boolean res = utils.authenticate(ourAuthenticationKey);
         if (res) return true;
         // if authenticating with our key fails, authenticate with default key
         res = utils.authenticate(defaultAuthenticationKey);
@@ -95,7 +91,7 @@ public class Ticket {
             return false;
         }
         // if authenticating with default key works, change the authentication key to ours
-        res = utils.writePages(authenticationKey, 0, 44, 4);
+        res = utils.writePages(ourAuthenticationKey, 0, 44, 4);
         if (res) {
             Utilities.log("Keys updated", false);
             return true;
@@ -123,7 +119,7 @@ public class Ticket {
     /**
      * Issue new tickets
      */
-    public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
+    public boolean issue(int daysValid, int uses) throws GeneralSecurityException, IOException {
         if (formatCard){
             formatCard();
             return true;
@@ -231,7 +227,7 @@ public class Ticket {
             validFor += daysValid;
             System.arraycopy(toBytes(validFor), 0, message, 20, 4);
 
-            //c. recompute the mac
+            //c. update the static data, and recompute the mac
             staticData = Arrays.copyOfRange(message, 0, 24);
             newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
             System.arraycopy(newMac, 0, message, 24, 4);
@@ -267,7 +263,8 @@ public class Ticket {
         System.arraycopy( counterBytes, 0, message, 12, 4); // copying card counter to counter state of static memory
         System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
         System.arraycopy( toBytes(daysValid), 0, message, 20, 4); // valid for
-        // add mac
+
+        // update static data, recompute mac and add mac
         staticData = Arrays.copyOfRange(message, 0, 24);
         newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
         System.arraycopy(newMac, 0, message, 24, 4);
@@ -400,7 +397,6 @@ public class Ticket {
                 infoToShow = "Failed to validate ticket.";
                 return false;
             }
-
             infoToShow = "Ticket validated (1st use).\n" +
                     (remainingTickets-1) + " tickets remaining.\n" +
                     "Expires on: " + dateFormatter.format( new Date( currentDateInMillis + validityDurationInMillis ) );
