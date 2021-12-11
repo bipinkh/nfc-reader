@@ -73,7 +73,7 @@ public class EmulatorFragment extends Fragment {
     public void issue() {
         if (active && Reader.connect()) {
             try {
-                ticket.issue(30, 10);
+                ticket.issue(30, 3);
                 ticket_info.setText(Ticket.getInfoToShow());
             } catch (Exception e) {
                 e.printStackTrace();

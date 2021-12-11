@@ -9,6 +9,8 @@ import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Date;
@@ -40,13 +42,15 @@ public class Ticket {
     private final Boolean isValid = false;
     private final int remainingUses = 0;
     private final int expiryTime = 0;
-    private final int secondUseTime = 1; // time in seconds to wait before 2nd use
+    private final int waitingSecondsBetweenTwoTicketIssues = 5; // time in seconds to wait before 2nd use
 
     private static final byte[] counterIncrementBy1 = {1,0,0,0};
     private static final byte[] empty4Bytes = {0,0,0,0};
 
     private static String infoToShow = ""; // Use this to show messages
     private static Boolean formatCard = false;
+
+    DateFormat dateFormatter = new SimpleDateFormat("yyyy-mm-dd hh:mm:ss");
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
@@ -150,7 +154,7 @@ public class Ticket {
             infoToShow = "Failed to read the memory";
             return false;
         }
-
+        // convert the read bytes to meaningful data for processing
         String appTag = bytesToStr( Arrays.copyOfRange(message, 0, 4) );
         String version = bytesToStr( Arrays.copyOfRange(message, 8, 12) );
         byte[] counterStateBytes = Arrays.copyOfRange(message, 12, 16);
@@ -163,6 +167,7 @@ public class Ticket {
         reverseByteArray(counterBytes);
         Integer counter = bytesToInt( counterBytes );
 
+        // few variable to track the process
         boolean issueNewTicket = false;
         boolean checkMac = true;
 
@@ -177,14 +182,14 @@ public class Ticket {
 
         // step 3: check the version
         if ( !issueNewTicket && !version.equals(ApplicationVersion)){
-            infoToShow = "Invalid version. Current version = "+ApplicationVersion;
+            infoToShow = "Invalid version. This app supports card formatted with app version " + ApplicationVersion;
             return false;
         }
 
         // key diversification
-        macAlgorithm.setKey( generatehash(new String(ourHMACKey), uid) );
+        macAlgorithm.setKey( generateDiversifiedKey(new String(ourHMACKey), uid) );
 
-        byte[] staticData;
+        byte[] staticData = Arrays.copyOfRange(message, 0, 24);
         byte[] newMac;
 
         // step 4.2 if not blank and MAC unmatches: abort
@@ -200,7 +205,6 @@ public class Ticket {
                 infoToShow = "Empty MAC";
                 return false;
             }
-            staticData = Arrays.copyOfRange(message, 0, 24);
             byte[] computedMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
             if (!Arrays.equals(mac, computedMac)){
                 infoToShow = "Wrong MAC";
@@ -211,9 +215,10 @@ public class Ticket {
 
         // step 4.3 if not blank and MAC matches: check ticket is expired or not
         long validityDurationInSec =  86400L * validFor; // changing days to seconds
-        int previousRemainingTickets = Math.max(0, ticketCount + counterState - counter);
-        boolean hasNonExpiredPreviousTickets = !issueNewTicket && firstUse == null; // if there is no first use at all
-        if (!hasNonExpiredPreviousTickets){ // if the previous tickets is used, there may be some tickets non-expired.
+        int previousRemainingTickets = Math.max(0, counterState + ticketCount - counter);
+        boolean hasNonExpiredPreviousTickets = !issueNewTicket && firstUse == null; // if there is no first use at all for previously issued tickets
+        if (!hasNonExpiredPreviousTickets){
+            // if at least one of the previously issued tickets is used, there may be some non-expired tickets.
             hasNonExpiredPreviousTickets = !issueNewTicket && ( previousRemainingTickets > 0 )
                     && new Date(firstUse.getTime() + validityDurationInSec * 1000).after(new Date()); // expiry time is after current time
         }
@@ -236,21 +241,22 @@ public class Ticket {
 
             // e. push.
             /*
-            since we changed pages (16-20) for ticketcount, (20-24) for validFor, (24-28) for static mac,
-            (28-32) for first use, we just write these pages only and ignore update of other page.
-            start page = 30, and page count = 4)
+            since we changed pages
+                P30 (16-20) ticketcount, P31 (20-24) validFor, P32 (24-28) static mac, P33 (28-32) first use,
+            we just write these pages only and ignore update of other page.
+            So, While writing in card:
+                start page = 30
+                page count = 4
              */
             byte[] toWrite = Arrays.copyOfRange(message, 16,32);
             res = utils.writePages(toWrite, 0, 30, 4);
-            if (res){
-                infoToShow = uses + " tickets added over "+ previousRemainingTickets +" non-expired tickets.";
-            } else{
+            if (!res){
                 infoToShow = "Failed to update tickets.";
                 return false;
             }
+            infoToShow = uses + " tickets added over "+ previousRemainingTickets +" non-expired tickets.";
             return true;
         }
-
 
         // Issuing new ticket
         System.out.println("Issuing new tickets because previous tickets expired.");
@@ -258,7 +264,6 @@ public class Ticket {
         // a. update the static data
         System.arraycopy( ApplicationTag.getBytes() , 0, message, 0, 4); // APP TAG
         System.arraycopy( ApplicationVersion.getBytes() , 0, message, 8, 4); // APP version
-        System.arraycopy( uid.getBytes() , 0, message, 4, 4); // UID
         System.arraycopy( counterBytes, 0, message, 12, 4); // copying card counter to counter state of static memory
         System.arraycopy( toBytes(uses), 0, message, 16, 4); // ticket count
         System.arraycopy( toBytes(daysValid), 0, message, 20, 4); // valid for
@@ -289,8 +294,13 @@ public class Ticket {
         byte[] uidBytes = new byte[8];
         String uid  = "";
         res = utils.readPages(0, 2, uidBytes, 0);
-        if (res) uid = new String(Base64.getEncoder().encode(uidBytes));
-        else {
+        if (res) {
+            uid = new String(Base64.getEncoder().encode(uidBytes));
+            if (uid.isEmpty()){
+                infoToShow = "Empty UID";
+                return false;
+            }
+        } else {
             infoToShow = "Failed to read UID";
             return false;
         }
@@ -331,26 +341,18 @@ public class Ticket {
 
         // step 3: check the version
         if ( version.isEmpty() || !version.equals(ApplicationVersion)){
-            infoToShow = "Invalid version. Current version = "+ApplicationVersion;
-            return false;
-        }
-
-        // step 4 check if there is UID.  if there isn't it's a blank card, ready to be formatted
-        if (uid.isEmpty()){
-            infoToShow = "Empty UID";
+            infoToShow = "Invalid version. App only supports version "+ApplicationVersion;
             return false;
         }
 
         // key diversification
-        macAlgorithm.setKey( generatehash(new String(ourHMACKey), uid) );
+        macAlgorithm.setKey( generateDiversifiedKey(new String(ourHMACKey), uid) );
 
         // step 4.2 if not blank and MAC unmatches: abort
-        byte[] staticData;
         boolean emptyMac = true;
-
         for (byte b : mac) {
             if (b != 0) {
-                emptyMac = false;
+                emptyMac = false; // if at least one byte is non-zero, the mac is non-empty
                 break;
             }
         }
@@ -358,15 +360,15 @@ public class Ticket {
             infoToShow = "Empty MAC";
             return false;
         }
-        staticData = Arrays.copyOfRange(message, 0, 24);
+        byte[] staticData = Arrays.copyOfRange(message, 0, 24);
         byte[] computedMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
         if (!Arrays.equals(mac, computedMac)){
-            infoToShow = "Wrong MAC";
+            infoToShow = "Invalid MAC";
             return false;
         }
 
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
-        int remainingTickets = Math.max(0, ticketCount + counterState - counter);
+        int remainingTickets = Math.max(0, counterState + ticketCount - counter);
         if ( remainingTickets <= 0){
             infoToShow = "No tickets";
             return false;
@@ -378,31 +380,35 @@ public class Ticket {
         long validityDurationInMillis = 1000L * 86400L * validFor;
         long currentDateInMillis = System.currentTimeMillis();
         if (firstUse != null && new Date(firstUse.getTime() + validityDurationInMillis).before(new Date()) ){
-            infoToShow = "Tickets expired timewise";
+            infoToShow = "Tickets expired.";
             return false;
         }else if (counterState.equals(counter)){ // means the first use
             firstUse = new Date(currentDateInMillis);
             lastUse = firstUse;
             System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
             System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
-            res = utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 ); // 26 + (28/4)
+            /*
+              in case of first use, we write P33 (28-32) firstUse and P34 (32-36) lastUse.
+              Once this is updated, we increment the counter.
+             */
+            res = // write firstUse and lastUse dates and increment counter
+                utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 )
+                && utils.writePages(counterIncrementBy1, 0, 41, 1); // !!! WARNING !!!: Update this line only if you are sure of what you are doing!!
+
+            // if res is false: either during updating firstUse and lastUse dates, or during counter update
             if (!res){
                 infoToShow = "Failed to validate ticket.";
                 return false;
             }
-            // increase the counter
-            res = utils.writePages(counterIncrementBy1, 0, 41, 1);
-            if (!res){
-                infoToShow = "Failed to validate ticket.";
-                return false;
-            }
-            infoToShow = "Ticket validated (1st use). \n"+ (remainingTickets-1) + " tickets remaining.\nExpires on: " + new Date( currentDateInMillis + validityDurationInMillis ) ;
+
+            infoToShow = "Ticket validated (1st use).\n" +
+                    (remainingTickets-1) + " tickets remaining.\n" +
+                    "Expires on: " + dateFormatter.format( new Date( currentDateInMillis + validityDurationInMillis ) );
             return true;
 
-        }else {
-            // not the first use
-            if ( lastUse != null && (currentDateInMillis- lastUse.getTime())/1000 < secondUseTime ){
-                infoToShow = "Ticket validated less than " + secondUseTime + " seconds ago";
+        }else { // not the first use
+            if ( lastUse != null && (currentDateInMillis- lastUse.getTime())/1000 < waitingSecondsBetweenTwoTicketIssues){
+                infoToShow = "Ticket validated less than " + waitingSecondsBetweenTwoTicketIssues + " seconds ago";
                 return false;
             }else {
                 lastUse = new Date(currentDateInMillis);
@@ -412,15 +418,9 @@ public class Ticket {
                 }
                 System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
 
-                // update the first and last use
-                res = utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 ); // 26 + (28/4)
-                if (!res){
-                    infoToShow = "Failed to validate ticket.";
-                    return false;
-                }
-
-                // increase the counter
-                res = utils.writePages(counterIncrementBy1, 0, 41, 1);
+                // update the first and last use, then increase the counter
+                res = utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 )
+                        && utils.writePages(counterIncrementBy1, 0, 41, 1); // !!! WARNING !!!: Update this line only if you are sure of what you are doing!!
                 if (!res){
                     infoToShow = "Failed to validate ticket.";
                     return false;
@@ -428,13 +428,13 @@ public class Ticket {
 
                 /*
                 there are 5 logs (each 4 bytes) from page 35 to 39 in the card's user memory.
-                each new log will replace the oldest log from these pages, so index of new log = (counter%5)+42
+                each new log will replace the oldest log from these pages, so index of new log = (counter%5)+35
                  */
                 int pageToUpdate = (counter % 5) + 35;
                 utils.writePages( toBytes(lastUse), 0, pageToUpdate, 1);
 
                 infoToShow = "Ticket validated. \n"+ (remainingTickets-1) + " tickets remaining." +
-                            "\nExpires on: " + new Date( firstUse.getTime() + validityDurationInMillis );
+                            "\nExpires on: " + dateFormatter.format( new Date( firstUse.getTime() + validityDurationInMillis ) );
                 return true;
             }
         }
@@ -504,7 +504,7 @@ public class Ticket {
         return buffer.array();
     }
 
-    private static byte[] generatehash(String masterKey, String uid){
+    private static byte[] generateDiversifiedKey(String masterKey, String uid){
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest((masterKey+uid).getBytes());
