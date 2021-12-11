@@ -39,6 +39,7 @@ public class Ticket {
     private final int remainingUses = 0;
     private final int expiryTime = 0;
     private final int waitingSecondsBetweenTwoTicketIssues = 5; // time in seconds to wait before 2nd use
+    private final int MaxLimitOfTicketNumber = 50; // maximum number of allowed tickets
     private static Boolean formatCard = false; /// !!! WARNING !!! This variable is set true only during development, to format card. Set it false in production
     private static String infoToShow = ""; // Use this to show messages
     DateFormat dateFormatter = new SimpleDateFormat("yyyy-mm-dd hh:mm:ss");
@@ -208,10 +209,14 @@ public class Ticket {
             }
         }
 
-
         // step 4.3 if not blank and MAC matches: check ticket is expired or not
         long validityDurationInSec =  86400L * validFor; // changing days to seconds
         int previousRemainingTickets = Math.max(0, counterState + ticketCount - counter);
+        if(previousRemainingTickets > MaxLimitOfTicketNumber){
+            // checking the safe limit
+            infoToShow = "This card has more than 50 tickets already. Cannot issue any more tickets.";
+            return false;
+        }
         boolean hasNonExpiredPreviousTickets = !issueNewTicket && firstUse == null; // if there is no first use at all for previously issued tickets
         if (!hasNonExpiredPreviousTickets){
             // if at least one of the previously issued tickets is used, there may be some non-expired tickets.
