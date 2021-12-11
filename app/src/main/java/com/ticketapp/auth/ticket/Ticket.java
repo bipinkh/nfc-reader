@@ -42,7 +42,7 @@ public class Ticket {
     private final int MaxLimitOfTicketNumber = 50; // maximum number of allowed tickets
     private static Boolean formatCard = false; /// !!! WARNING !!! This variable is set true only during development, to format card. Set it false in production
     private static String infoToShow = ""; // Use this to show messages
-    DateFormat dateFormatter = new SimpleDateFormat("yyyy-mm-dd hh:mm:ss");
+    DateFormat dateFormatter = new SimpleDateFormat("MM/dd/yyyy hh:mm");
 
 
     private static final byte[] counterIncrementBy1 = {1,0,0,0};
@@ -187,7 +187,7 @@ public class Ticket {
         macAlgorithm.setKey( generateDiversifiedKey(new String(ourHMACKey), uid) );
 
         byte[] staticData = Arrays.copyOfRange(message, 0, 24);
-        byte[] newMac;
+        byte[] staticDataMac;
 
         // step 4.2 if not blank and MAC unmatches: abort
         if (checkMac){
@@ -234,23 +234,28 @@ public class Ticket {
 
             //c. update the static data, and recompute the mac
             staticData = Arrays.copyOfRange(message, 0, 24);
-            newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-            System.arraycopy(newMac, 0, message, 24, 4);
+            staticDataMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+            System.arraycopy(staticDataMac, 0, message, 24, 4);
 
             // d. clear first use
             System.arraycopy( empty4Bytes , 0, message, 28, 4); // clear first use
+            // get new dynamic mac
+            byte[] dynamicData = Arrays.copyOfRange(message, 24, 52);
+            byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
+            System.arraycopy( newDynamicMac , 0, message, 52, 4);
 
             // e. push.
             /*
             since we changed pages
-                P30 (16-20) ticketcount, P31 (20-24) validFor, P32 (24-28) static mac, P33 (28-32) first use,
+                P30 (16-20) ticketcount, P31 (20-24) validFor, P32 (24-28) static mac, P33 (28-32) first use, and P39 (dynamic mac)
             we just write these pages only and ignore update of other page.
             So, While writing in card:
                 start page = 30
                 page count = 4
              */
             byte[] toWrite = Arrays.copyOfRange(message, 16,32);
-            res = utils.writePages(toWrite, 0, 30, 4);
+            res = utils.writePages(toWrite, 0, 30, 4) // updated data
+                    && utils.writePages(newDynamicMac, 0, 39, 1); // new dynamic mac
             if (!res){
                 infoToShow = "Failed to update tickets.";
                 return false;
@@ -271,12 +276,15 @@ public class Ticket {
 
         // update static data, recompute mac and add mac
         staticData = Arrays.copyOfRange(message, 0, 24);
-        newMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-        System.arraycopy(newMac, 0, message, 24, 4);
+        staticDataMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+        System.arraycopy(staticDataMac, 0, message, 24, 4);
 
         // b. update the dynamic data
         System.arraycopy( empty4Bytes , 0, message, 28, 4); // clear first use
         System.arraycopy( empty4Bytes , 0, message, 32, 4); // clear last use
+        byte[] dynamicData = Arrays.copyOfRange(message, 24, 52);
+        byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
+        System.arraycopy( newDynamicMac , 0, message, 52, 4); // dynamic mac
 
         // d. write all the data
         res = utils.writePages(message, 0, 26, 14); // exclude the last 2 page for lock and counter
@@ -327,10 +335,11 @@ public class Ticket {
         Integer counterState = bytesToInt( Arrays.copyOfRange(message, 12, 16) );
         Integer ticketCount = bytesToInt( Arrays.copyOfRange(message, 16, 20) );
         Integer validFor = bytesToInt( Arrays.copyOfRange(message, 20, 24) );
-        byte[] mac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
+        byte[] staticDataMac = Arrays.copyOfRange(message, 24, 28); // first 4 byte
         Date firstUse = bytesToDate( Arrays.copyOfRange(message, 28, 32) );
         Date lastUse = bytesToDate( Arrays.copyOfRange(message, 32, 36) );
-        byte[] logs = Arrays.copyOfRange(message, 36, 56);
+        byte[] logs = Arrays.copyOfRange(message, 36, 52);
+        byte[] dynamicDataMac = Arrays.copyOfRange(message, 52, 56);
         byte[] counterBytes = Arrays.copyOfRange(message, 60, 64);
         reverseByteArray(counterBytes);
         Integer counter = bytesToInt( counterBytes );
@@ -350,26 +359,45 @@ public class Ticket {
         // key diversification
         macAlgorithm.setKey( generateDiversifiedKey(new String(ourHMACKey), uid) );
 
-        // step 4.2 if not blank and MAC unmatches: abort
+        // check static MAC
         boolean emptyMac = true;
-        for (byte b : mac) {
+        for (byte b : staticDataMac) {
             if (b != 0) {
                 emptyMac = false; // if at least one byte is non-zero, the mac is non-empty
                 break;
             }
         }
         if (emptyMac){
-            infoToShow = "Empty MAC";
+            infoToShow = "Failed to validate.\nEmpty MAC for static data.";
             return false;
         }
         byte[] staticData = Arrays.copyOfRange(message, 0, 24);
-        byte[] computedMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
-        if (!Arrays.equals(mac, computedMac)){
-            infoToShow = "Invalid MAC";
+        byte[] computedStaticMac = Arrays.copyOfRange( macAlgorithm.generateMac(staticData), 0, 4);
+        if (!Arrays.equals(staticDataMac, computedStaticMac)){
+            infoToShow = "Failed to validate.\nInvalid MAC for static data.";
             return false;
         }
 
-        // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no ticekts, abort.
+        // check dynamic MAC
+        emptyMac = true;
+        for (byte b : dynamicDataMac) {
+            if (b != 0) {
+                emptyMac = false; // if at least one byte is non-zero, the mac is non-empty
+                break;
+            }
+        }
+        if (emptyMac){
+            infoToShow = "Failed to validate.\nEmpty MAC for dynamic data.";
+            return false;
+        }
+        byte[] dynamicData = Arrays.copyOfRange(message, 24, 52);
+        byte[] computedDynamicMac = Arrays.copyOfRange( macAlgorithm.generateMac(dynamicData), 0, 4);
+        if (!Arrays.equals(dynamicDataMac, computedDynamicMac)){
+            infoToShow = "Failed to validate.\nInvalid MAC for dynamic data.";
+            return false;
+        }
+
+        // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no tickets, abort.
         int remainingTickets = Math.max(0, counterState + ticketCount - counter);
         if ( remainingTickets <= 0){
             infoToShow = "No tickets";
@@ -389,12 +417,16 @@ public class Ticket {
             lastUse = firstUse;
             System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
             System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
+            dynamicData = Arrays.copyOfRange(message, 24, 52);
+            byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
             /*
               in case of first use, we write P33 (28-32) firstUse and P34 (32-36) lastUse.
+              After then, we update the dynamic mac
               Once this is updated, we increment the counter.
              */
             res = // write firstUse and lastUse dates and increment counter
                 utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 )
+                && utils.writePages(newDynamicMac, 0, 39, 1)
                 && utils.writePages(counterIncrementBy1, 0, 41, 1); // !!! WARNING !!!: Update this line only if you are sure of what you are doing!!
 
             // if res is false: either during updating firstUse and lastUse dates, or during counter update
@@ -418,22 +450,32 @@ public class Ticket {
                     System.arraycopy( toBytes(firstUse), 0, message, 28, 4); // first use
                 }
                 System.arraycopy( toBytes(lastUse), 0, message, 32, 4); // last use
+                /*
+                    there are 4 logs (each 4 bytes):
+                        from byte position 36-52 in the message array.
+                        in pages 35, 36, 37, 38 in the card user memory.
+                    each new log will replace the oldest log from these spaces, so
+                        log_index = counter%4
+                        log_message_position = log_index*4+36
+                        log_page_index = log_index+35
+                 */
+                int newLogMessagePosition = (counter % 4) * 4 + 36;
+                int newLogPageIndex = (counter % 4) + 35;
+                byte[] newLog = toBytes(lastUse);
+                System.arraycopy( newLog, 0, message, newLogMessagePosition, 4); // new log
+                // now, calculate dynamic mac
+                dynamicData = Arrays.copyOfRange(message, 24, 52);
+                byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
 
                 // update the first and last use, then increase the counter
                 res = utils.writePages( Arrays.copyOfRange(message, 28,36), 0, 33,2 )
+                        && utils.writePages( newLog, 0, newLogPageIndex, 1)
+                        && utils.writePages(newDynamicMac, 0, 39, 1)
                         && utils.writePages(counterIncrementBy1, 0, 41, 1); // !!! WARNING !!!: Update this line only if you are sure of what you are doing!!
                 if (!res){
                     infoToShow = "Failed to validate ticket.";
                     return false;
                 }
-
-                /*
-                there are 5 logs (each 4 bytes) from page 35 to 39 in the card's user memory.
-                each new log will replace the oldest log from these pages, so index of new log = (counter%5)+35
-                 */
-                int pageToUpdate = (counter % 5) + 35;
-                utils.writePages( toBytes(lastUse), 0, pageToUpdate, 1);
-
                 infoToShow = "Ticket validated. \n"+ (remainingTickets-1) + " tickets remaining." +
                             "\nExpires on: " + dateFormatter.format( new Date( firstUse.getTime() + validityDurationInMillis ) );
                 return true;
