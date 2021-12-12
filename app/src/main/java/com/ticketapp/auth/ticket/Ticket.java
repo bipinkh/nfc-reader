@@ -48,6 +48,15 @@ public class Ticket {
     private static final byte[] counterIncrementBy1 = {1,0,0,0};
     private static final byte[] empty4Bytes = {0,0,0,0};
 
+    /*
+        AUTH0: (byte 0  of page 2Ah or 42d)
+            page address from which the auth is required. In our case, page 26 = 1A (hex)
+        AUTH1: (byte 0  of page 2Bh or 43d)
+            bit_0 == 1 means auth required for WRITE access. bit_0 == 0 means auth required for WRITE & READ access.
+     */
+    private static final byte auth0Byte = Byte.parseByte("1A", 16);
+    private static final byte auth1Byte = Byte.parseByte("00000000", 2);
+
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
@@ -116,6 +125,19 @@ public class Ticket {
         }
     }
 
+    private boolean setAuthConfigurations(){
+        byte[] authConfiguration = new byte[8];
+        boolean res = utils.readPages(42, 2, authConfiguration, 0);
+        if (res){
+            authConfiguration[0] = auth0Byte;
+            authConfiguration[5] = auth1Byte;
+            res = utils.writePages(authConfiguration, 0, 42, 2);
+            return res;
+        }else {
+            return false;
+        }
+    }
+
 
     /**
      * Issue new tickets
@@ -125,6 +147,7 @@ public class Ticket {
             formatCard();
             return true;
         }
+
         boolean res;
 
         // read app tag
@@ -142,6 +165,7 @@ public class Ticket {
             infoToShow = "Authentication failed";
             return false;
         }
+        setAuthConfigurations();
 
         // step 1: read from page 26 to 41  [26:39 user memory, 40: lock bytes, 41: counter]
         byte[] message = new byte[64];
