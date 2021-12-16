@@ -38,7 +38,7 @@ public class Ticket {
     private final Boolean isValid = false;
     private final int remainingUses = 0;
     private final int expiryTime = 0;
-    private final int waitingSecondsBetweenTwoTicketIssues = 1; // time in seconds to wait before 2nd use
+    private final int waitingSecondsBetweenTwoTicketIssues = 5; // time in seconds to wait before 2nd use
     private final int MaxLimitOfTicketNumber = 50; // maximum number of allowed tickets
     private final int MaxLimitOfValidDays = 100; // maximum number of days allowed for validity
     private static Boolean formatCard = false; /// !!! WARNING !!! This variable is set true only during development, to format card. Set it false in production
@@ -271,8 +271,7 @@ public class Ticket {
 
             // e. push.
             /*
-            since we changed pages
-                P34 (12-16) ticketcount, P35 (16-20) validFor, P36 (20-24) static mac, P37 (24-28) first use, and P39 (dynamic mac)
+            P34 (12-16) ticketcount, P35 (16-20) validFor, P36 (20-24) static mac, P37 (24-28) first use, and P39 (dynamic mac)
             we just write these pages only and ignore update of other page.
             So, While writing in card:
                 start page = 34
@@ -307,7 +306,7 @@ public class Ticket {
         // b. update the dynamic data
         System.arraycopy( empty4Bytes , 0, message, 24, 4); // clear first use
         System.arraycopy( empty4Bytes , 0, message, 28, 4); // clear last use
-        byte[] dynamicData = Arrays.copyOfRange(message, 24, 32);
+        byte[] dynamicData = Arrays.copyOfRange(message, 24, 28); // only the first use is dynamic data
         byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
         System.arraycopy( newDynamicMac , 0, message, 32, 4); // dynamic mac
 
@@ -403,22 +402,25 @@ public class Ticket {
         }
 
         // check dynamic MAC
-        emptyMac = true;
-        for (byte b : dynamicDataMac) {
-            if (b != 0) {
-                emptyMac = false; // if at least one byte is non-zero, the mac is non-empty
-                break;
+        byte[] dynamicData = Arrays.copyOfRange(message, 24, 28);
+
+        if (firstUse != null){
+            emptyMac = true;
+            for (byte b : dynamicDataMac) {
+                if (b != 0) {
+                    emptyMac = false; // if at least one byte is non-zero, the mac is non-empty
+                    break;
+                }
             }
-        }
-        if (emptyMac){
-            infoToShow = "Failed to validate.\nEmpty MAC for dynamic data.";
-            return false;
-        }
-        byte[] dynamicData = Arrays.copyOfRange(message, 24, 32);
-        byte[] computedDynamicMac = Arrays.copyOfRange( macAlgorithm.generateMac(dynamicData), 0, 4);
-        if (!Arrays.equals(dynamicDataMac, computedDynamicMac)){
-            infoToShow = "Failed to validate.\nInvalid MAC for dynamic data.";
-            return false;
+            if (emptyMac){
+                infoToShow = "Failed to validate.\nEmpty MAC for dynamic data.";
+                return false;
+            }
+            byte[] computedDynamicMac = Arrays.copyOfRange( macAlgorithm.generateMac(dynamicData), 0, 4);
+            if (!Arrays.equals(dynamicDataMac, computedDynamicMac)){
+                infoToShow = "Failed to validate.\nInvalid MAC for dynamic data.";
+                return false;
+            }
         }
 
         // step 6: check the number of tickets remaining using the CNTR and  counter in static data. If no tickets, abort.
@@ -433,25 +435,22 @@ public class Ticket {
         // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
         long validityDurationInMillis = 1000L * 86400L * validFor;
         long currentDateInMillis = System.currentTimeMillis();
+
         if (firstUse != null && new Date(firstUse.getTime() + validityDurationInMillis).before(new Date()) ){
             infoToShow = "Tickets expired.";
             return false;
-        }else if (counterState.equals(counter)){ // means the first use
+
+        }else if (counterState.equals(counter) || firstUse == null){ // means the first use
+
             firstUse = new Date(currentDateInMillis);
-            lastUse = firstUse;
             System.arraycopy( toBytes(firstUse), 0, message, 24, 4); // first use
-            System.arraycopy( toBytes(lastUse), 0, message, 28, 4); // last use
-            dynamicData = Arrays.copyOfRange(message, 24, 32);
+            dynamicData = Arrays.copyOfRange(message, 24, 28);
             byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
-            /*
-              in case of first use, we write P33 (28-32) firstUse and P34 (32-36) lastUse.
-              After then, we update the dynamic mac
-              Once this is updated, we increment the counter.
-             */
-            res = // write firstUse and lastUse dates, and increment counter
-                utils.writePages( Arrays.copyOfRange(message, 24,32), 0, 37,2 )
-                && utils.writePages(newDynamicMac, 0, 39, 1)
-                && utils.writePages(counterIncrementBy1, 0, 41, 1); // !!! WARNING !!!: Update this line only if you are sure of what you are doing!!
+
+            res = // write firstUse, dynamic mac, and increment counter. 3 WRITE commands only!!
+                utils.writePages( Arrays.copyOfRange(message, 24,28), 0, 37,1 ) // first use
+                && utils.writePages(newDynamicMac, 0, 39, 1) // dynamic mac
+                && utils.writePages(counterIncrementBy1, 0, 41, 1); // increment counter
 
             // if res is false: either during updating firstUse and lastUse dates, or during counter update
             if (!res){
@@ -461,37 +460,32 @@ public class Ticket {
             infoToShow = "Ticket validated (1st use).\n" +
                     (remainingTickets-1) + " tickets remaining.\n" +
                     "Expires on: " + dateFormatter.format( new Date( currentDateInMillis + validityDurationInMillis ) );
-            return true;
 
         }else { // not the first use
+
             if ( lastUse != null && (currentDateInMillis- lastUse.getTime())/1000 < waitingSecondsBetweenTwoTicketIssues){
                 infoToShow = "Ticket validated less than " + waitingSecondsBetweenTwoTicketIssues + " seconds ago";
                 return false;
-            }else {
-                lastUse = new Date(currentDateInMillis);
-                if (firstUse == null){
-                    firstUse = lastUse;
-                    System.arraycopy( toBytes(firstUse), 0, message, 24, 4); // first use
-                }
-                System.arraycopy( toBytes(lastUse), 0, message, 28, 4); // last use
-
-                // now, calculate dynamic mac
-                dynamicData = Arrays.copyOfRange(message, 24, 32);
-                byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
-
-                // update the first and last use, then increase the counter
-                res = utils.writePages( Arrays.copyOfRange(message, 24,32), 0, 37,2 )
-                        && utils.writePages(newDynamicMac, 0, 39, 1)
-                        && utils.writePages(counterIncrementBy1, 0, 41, 1); // !!! WARNING !!!: Update this line only if you are sure of what you are doing!!
-                if (!res){
-                    infoToShow = "Failed to validate ticket.";
-                    return false;
-                }
-                infoToShow = "Ticket validated. \n"+ (remainingTickets-1) + " tickets remaining." +
-                            "\nExpires on: " + dateFormatter.format( new Date( firstUse.getTime() + validityDurationInMillis ) );
-                return true;
             }
+
+            // increase the counter. If it succeeds, show the validated information. 1 WRITE command only !!
+            res = utils.writePages(counterIncrementBy1, 0, 41, 1);
+            if (!res){
+                infoToShow = "Failed to validate ticket.";
+                return false;
+            }
+            infoToShow = "Ticket validated. \n"+ (remainingTickets-1) + " tickets remaining." +
+                        "\nExpires on: " + dateFormatter.format( new Date( firstUse.getTime() + validityDurationInMillis ) );
         }
+
+         /*
+                 In the end: whether it's first use or not
+                 try to update last use as well, we ignore the response, because it's not critical even if it fails because it is only used to
+                 prevent two successive quick tap. it serves no security purpose.
+         */
+        lastUse = new Date(currentDateInMillis);
+        utils.writePages( toBytes(lastUse), 0, 38,1);
+        return true;
     }
 
     private static Date bytesToDate(byte[] b){
