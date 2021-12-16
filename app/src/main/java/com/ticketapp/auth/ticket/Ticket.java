@@ -5,7 +5,6 @@ import com.ticketapp.auth.app.main.TicketActivity;
 import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
@@ -51,11 +50,11 @@ public class Ticket {
 
     /*
         AUTH0: (byte 0  of page 2Ah or 42d)
-            page address from which the auth is required. In our case, page 26 = 1A (hex)
+            page address from which the auth is required. In our case, page 31 = 1F (hex)
         AUTH1: (byte 0  of page 2Bh or 43d)
             bit_0 == 1 means auth required for WRITE access. bit_0 == 0 means auth required for WRITE & READ access.
      */
-    private static final byte auth0Byte = Byte.parseByte("1A", 16);
+    private static final byte auth0Byte = Byte.parseByte("1F", 16);
     private static final byte auth1Byte = Byte.parseByte("00000000", 2);
 
 
@@ -90,9 +89,9 @@ public class Ticket {
     }
 
 
-    public boolean authenticateKeys(){
+    public boolean authenticateKeys(byte[] password){
         // first, try to authenticate with our key
-        boolean res = utils.authenticate(ourAuthenticationKey);
+        boolean res = utils.authenticate(password);
         if (res) return true;
         // if authenticating with our key fails, authenticate with default key
         res = utils.authenticate(defaultAuthenticationKey);
@@ -102,7 +101,7 @@ public class Ticket {
             return false;
         }
         // if authenticating with default key works, change the authentication key to ours
-        res = utils.writePages(ourAuthenticationKey, 0, 44, 4);
+        res = utils.writePages(password, 0, 44, 4);
         if (res) {
             Utilities.log("Keys updated", false);
             return true;
@@ -117,8 +116,14 @@ public class Ticket {
      * Function to format the card. Used during debugging when we had to reset all the data fields.
      * Can also be used when the card format functionality is added to the card later.
      */
-    private void formatCard(){
-        boolean res = authenticateKeys() && utils.writePages(new byte[64], 0, 26, 14);
+    private void formatCard(byte[] password){
+        boolean res = authenticateKeys(password)
+                && utils.writePages(new byte[64], 0, 26, 14);
+        if (!res){
+            res = authenticateKeys(ourAuthenticationKey)
+                    && utils.writePages(password, 0, 44, 4)
+                    && utils.writePages(new byte[64], 0, 26, 14);
+        }
         if (res) {
             infoToShow = "Formatted the card";
         } else {
@@ -144,10 +149,6 @@ public class Ticket {
      * Issue new tickets
      */
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException, IOException {
-        if (formatCard){
-            formatCard();
-            return true;
-        }
 
         boolean res;
 
@@ -161,8 +162,19 @@ public class Ticket {
             return false;
         }
 
+        // key diversification
+        byte[] cardAuthPassword = generateDiversifiedKey(new String(ourAuthenticationKey), uid);
+        byte[] macPassword = generateDiversifiedKey(new String(ourHMACKey), uid);
+        macAlgorithm.setKey( macPassword );
+
+        // only for development purpose. To format the card.
+        if (formatCard){
+            formatCard(cardAuthPassword);
+            return true;
+        }
+
         // Authenticate
-        if (!authenticateKeys()){
+        if (!authenticateKeys(cardAuthPassword)){
             infoToShow = "Authentication failed";
             return false;
         }
@@ -207,9 +219,6 @@ public class Ticket {
             infoToShow = "Invalid version. This app supports card formatted with app version " + ApplicationVersion;
             return false;
         }
-
-        // key diversification
-        macAlgorithm.setKey( generateDiversifiedKey(new String(ourHMACKey), uid) );
 
         byte[] staticData = Arrays.copyOfRange(message, 0, 20);
         byte[] staticDataMac;
@@ -339,8 +348,13 @@ public class Ticket {
             return false;
         }
 
+        // key diversification
+        byte[] cardAuthPassword = generateDiversifiedKey(new String(ourAuthenticationKey), uid);
+        byte[] macPassword = generateDiversifiedKey(new String(ourHMACKey), uid);
+        macAlgorithm.setKey( macPassword );
+
         // Authenticate
-        if (!authenticateKeys()){
+        if (!authenticateKeys(cardAuthPassword)){
             infoToShow = "Authentication failed";
             return false;
         }
