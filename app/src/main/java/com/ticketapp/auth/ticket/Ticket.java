@@ -40,7 +40,7 @@ public class Ticket {
     private final int expiryTime = 0;
     private final int waitingSecondsBetweenTwoTicketIssues = 5; // time in seconds to wait before 2nd use
     private final int MaxLimitOfTicketNumber = 50; // maximum number of allowed tickets
-    private final int MaxLimitOfValidDays = 100; // maximum number of days allowed for validity
+    private final int MaxLimitOfValidDays = 90; // maximum number of days allowed for validity
     private static Boolean formatCard = false; /// !!! WARNING !!! This variable is set true only during development, to format card. Set it false in production
     private static String infoToShow = ""; // Use this to show messages
     DateFormat dateFormatter = new SimpleDateFormat("MM/dd/yyyy hh:mm");
@@ -254,7 +254,7 @@ public class Ticket {
             ticketCount += uses;
             System.arraycopy(toBytes(ticketCount), 0, message, 12, 4);
             // b. increase the validity for
-            validFor = Math.max(MaxLimitOfValidDays, daysValid+validFor);
+            validFor = Math.min(MaxLimitOfValidDays, daysValid+validFor);
             System.arraycopy(toBytes(validFor), 0, message, 16, 4);
 
             //c. update the static data, and recompute the mac
