@@ -393,9 +393,6 @@ public class Ticket {
             return false;
         }
 
-        // key diversification
-        macAlgorithm.setKey( generateDiversifiedKey(new String(ourHMACKey), uid) );
-
         // check static MAC
         boolean emptyMac = true;
         for (byte b : staticDataMac) {
