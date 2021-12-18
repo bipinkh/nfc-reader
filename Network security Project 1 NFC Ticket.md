@@ -3,6 +3,7 @@
 ---  
 
 ####<center>By "Alessandro Chiarelli (1012084)" and "Bipin Khatiwada (1011292)"</center>
+Group 19
   
 ---  
 
@@ -70,31 +71,31 @@ All the data needed for validating the ticket and authenticity is present in the
 --
 #### Authentication
 We overwrite the default key with our own master key. Using the Key diversification as shown in the figure above, each card will have unique shared secret key. Master keys, stored in the reader, combined with the unique serial ID of the card will always (with very high probability) generate unique shared secret key that'll be used for authentication and MAC generation.  So, the advantages are:
-- Snce default key is overwritten, there's no possibility of using attack with default card key.
-- Cloning is prevented because attacker would have to know the shared key first.
+- Since default key is overwritten, there's no possibility of using the default card key.
+- Cloning is prevented because the attacker would have to know the shared key first.
 
 --
 
 #### Key leakage
-Since we read the card ID and calculate the shared key using master key on the reader device,
+Since we read the card UID and calculate the shared key using master key on the reader device,
 - The master key would never leave the reader device and not be used/sent directly in any communication.
--  Even if the attacker compromises the authentication or mac key of one card, they would not be able to compromise other cards because each shared key would be different.
+-  Even if the attacker compromises the authentication or MAC key of one card, they would not be able to compromise other cards because each shared key would be different.
 
 --
 
 #### Read/Write of the memory pages
-AUTH1 and AUTH2 parameters are set such that all the memory pages used in this project (page 31 to 39) are **read-write protected**. So, without knowing shared key, only serial ID of the card can be known, which is not sufficient to perform any attack.
+AUTH1 and AUTH2 parameters are set such that all the memory pages used in this project (page 31 to 39) are **read-write protected**. So, without knowing shared key, only serial UID of the card can be known, which is not sufficient to perform any attack.
 
 --
 
 #### Logging and Transaction logs in the card
-We experimented storing logs of past 5 transactions in the card itself, but that increased number of WRITE commands during each validation. Although only one WRITE command could have been used to store latest log by replacing oldest log, we removed it from storing in card to prevent tearing. So, now, the logging of the event is done only in the reader side and no logs are stored in the card. This can further be properly managed using online server to store log, or exporting logs in a separate file. While doing this, we can elimiinate to include any personal user data and delete it in regular interval in compliance with GDPR or any other privacy regulation.
+We experimented storing logs of past 5 transactions in the card itself, but that increased number of WRITE commands during each validation. Although only one WRITE command could have been used to store the latest log by replacing the oldest log, we removed it from storing in card to prevent tearing. So, now, the logging of the event is done only on the reader side and no logs are stored in the card. This can further be properly managed using an online server to store logs, or exporting them to a separate file. While doing this, we can exclude any personal user data and delete it in regular intervals in compliance with GDPR or any other privacy regulation.
 
 --
 
 #### App Tag and App Version
-Right after authentication is successful, we check the application tag stored in page 31 and application version in page 32.
-If the application tag matches, it means the card may be ours and is for the ticket use case that we designed it for. So, we can proceed further. Else, the card might be ours (since we were able to authenticate it) or the card is brand new, but not beign used for this particular ticketing use case.
+Right after the authentication is successful, we check that the application tag is stored in page 31 and application version in page 32.
+If the application tag matches, it means the card may be ours and for the ticket use case that we designed it for. So, we can proceed further. Else, the card might be ours (since we were able to authenticate it) or the card is brand new, but not being used for this particular ticketing use case.
 By checking the application version, we can handle the change in application updates, flow of data read/write, identify the data structure present in the card and proceed further. With this, any update or change in the application side won't invalidate the previously issued cards. In short, it enables **backward compatibility** .
 
 --
@@ -105,44 +106,44 @@ If the card can be authenticated with the default manufacture key, we make sure 
 --
 
 #### MitM attack between reader and card
-Assuming that the attacker somehow mounted special hardware to perform MitM attack between reader and the card itself, we never share the master key in between the card and the reader. Also, we write the shared key to the card only during formatting and it is then never sent in the communication messages anytime later. However, it is due to the fact that Ultralight C does not have secure session protocol, attacker can still spoof or launch attack after the first authentication is complete. So, the security depends on the security of the reader's machine.
+Assuming that the attacker somehow mounted special hardware to perform MitM attack between reader and the card itself, we never share the master key between the card and the reader. Also, we write the shared key to the card only during formatting and it is then never sent in the communication messages anytime later. However, it is due to the fact that Ultralight C does not have secure session protocol, attacker can still spoof or launch an attack after the first authentication is completed. So, the security depends on the security of the reader's machine.
 
 --
 
 #### Data Integrity
-For all the information stored in the card (app tag, app version, counter state, ticket count, valid time), we generate a MAC using generated MAC key that is unique to each card. We call this **static mac** because the information is <u>stored only once</u> during issue and never changes during validation. Any changes in those values would be detected using MAC checks.
-Attacker cannot reuse the MAC value because The key used for MAC is obtained using the key diversification, which further depends on the  master key and the card UID. Since each card has different UID, MAC generated for same message will not match in 2 different cards.
+For all the information stored in the card (app tag, app version, counter state, ticket count, valid time), we generate a MAC using the generated MAC key that is unique to each card. We call this **static MAC** because the information is <u>stored only once</u> during issue and never changes during validation. Any changes in those values would be detected using MAC checks.
+Attacker cannot reuse the MAC value because the key used for MAC is obtained using the key diversification, which further depends on the  master key and the card UID. Since each card has different UID, MAC generated for same message will not match in 2 different cards.
 
-For the dynamic data that changes during validation (eg: first use) we generate a separate **dynamic mac** and store. This MAC generation happens <u>only once</u> during the first validation and never repeated unless new tickets are issued and first use date has to be cleared.
+For the dynamic data that changes during validation (eg: first use) we generate a separate **dynamic mac** and store it. This MAC generation happens <u>only once</u> during the first validation and it is never repeated unless new tickets are issued and first use date has to be cleared.
 
 --
 
 #### Rollback Attack Prevention
-The counter of the card is one way monotonic counter which cannot be roll back. Even if the attacker copies the old data and old mac to the card, due to the fact that we check the remaining count as the difference between current counter value and the counter state that was set during the issue, the rollback action won't be able to generate new tickets.
+The counter of the card is one way monotonic counter which cannot be rolled back. Even if the attacker copies old data and old MAC from the card, due to the fact that we check the remaining count as the difference between current counter value and the counter state that was set during the issue, the rollback action won't be able to generate new tickets.
 
 --
 
 #### Tearing
-To prevent/minimize the tearing, the ticket validation process has minimum possible WRITE count. There are
-- 3 WRITEs during first validation (1 for storing <u>first use</u>, 1 for storing <u>dynamic mac</u>, 1 for increasing <u>counter</u>)
+To prevent or minimize tearing issues, the ticket validation process has the minimal number of WRITE operations. There are
+- 3 WRITEs during first validation (1 for storing <u>first use</u>, 1 for storing <u>dynamic MAC</u>, 1 for increasing <u>counter</u>)
 - 1 WRITE in any subsequent validations (only to increase the <u>counter</u>)
 
-After each validation, we have also added an extra WRITE command during validation to store the last use date. However, even if this last WRITE command fails, it won't affect the app functionality and will have no effect on security. The purpose of last use date is to prevent two successive validations within 5 seconds interval. In case, the last use is failed to write due to tearing, worst that can happen is the 2nd validation is allowed within 5 seconds.
+After each validation, we have also added an extra WRITE command during validation to store the last use date. However, even if this last WRITE command fails, it won't affect the app functionality and will have no effect on security. The purpose of last use date is to prevent two successive validations within a 5 second interval. In case the last use is failed to be written due to tearing, the worst case scenario is that the 2nd validation is allowed within 5 seconds.
 
 --
 
 #### Idempotent operations
-We forbid the two successive validations within 5 seconds using the last use field in the card. In real world, the interval can be increased from 5 seconds to 1 minute depending on the use case. However, this can be modified if we are to allow second validation without any reduction in the ticket count as well. This modification however can allow pass-back fraud. So, as a design choice we opted to forbid ticket validation within 5 seconds.
+We forbid two successive validations within 5 seconds using the last use field in the card. In a real world scenario, the interval can be increased from 5 seconds to 1 minute depending on the use case. However, this can be modified if we are to allow second validation without any reduction in the ticket count as well. This modification however can allow pass-back fraud. So, as a design choice we opted to forbid ticket validation within 5 seconds.
 
 --
 
 #### Pass-back protection
-Our app forbids to validate the same ticket twice within 5 seconds providing a level of security for pass-back. This interval is configurable to increase the interval. SImilarlu, this pass-back operation can also be prevented by checking the usage logs in the reader side to see recent validations. However, this is not implemented in our implementation.
+Our app forbids to validate the same ticket twice within 5 seconds providing a level of security for pass-back. This interval is configurable to increase the interval. Similarly, this pass-back operation can also be prevented by checking the usage logs in the reader side to see recent validations. However, this is not currently implemented.
 
 --
 
 #### Signalling success
-Only after we complete all the necessary WRITE commands in our application, we show the SUCCESS message. This makes user to tap the card for sufficient time without tearing it between the transactions.
+Only after we complete all the necessary WRITE commands in our application, we show the SUCCESS message. The user can now remove the card.
 
 --
 
@@ -181,7 +182,8 @@ In order to issue tickets and/or format new cards, we use the `issue() ` functio
         6.1.2. Ensure total ticket count is no more than 50.  
         6.1.3. Add the validity period of new tickets plus the previous validity period.         
         6.1.4. Ensure total validity period is no more than 90 days.  
-    6.2. Else, 6.2.1. Add App Tag and App version if missing. 
+    6.2. Else, 
+        6.2.1. Add App Tag and App version if missing. 
         6.2.2. Add counter value to counter state memory. 
         6.2.3. Add new tickets to issue. 
         6.2.4. Add new validity period.

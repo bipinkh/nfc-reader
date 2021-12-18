@@ -273,22 +273,17 @@ public class Ticket {
 
             // d. clear first use
             System.arraycopy( empty4Bytes , 0, message, 24, 4); // clear first use
-            // get new dynamic mac
-            byte[] dynamicData = Arrays.copyOfRange(message, 24, 32);
-            byte[] newDynamicMac = Arrays.copyOfRange(macAlgorithm.generateMac(dynamicData), 0, 4);
-            System.arraycopy( newDynamicMac , 0, message, 32, 4);
 
             // e. push.
             /*
-            P34 (12-16) ticketcount, P35 (16-20) validFor, P36 (20-24) static mac, P37 (24-28) first use, and P39 (dynamic mac)
+            P34 (12-16) ticketcount, P35 (16-20) validFor, P36 (20-24) static mac, P37 (24-28) first use
             we just write these pages only and ignore update of other page.
             So, While writing in card:
                 start page = 34
                 page count = 4
              */
             byte[] toWrite = Arrays.copyOfRange(message, 12,28);
-            res = utils.writePages(toWrite, 0, 34, 4) // updated data
-                    && utils.writePages(newDynamicMac, 0, 39, 1); // new dynamic mac
+            res = utils.writePages(toWrite, 0, 34, 4); // updated data
             if (!res){
                 infoToShow = "Failed to update tickets.";
                 return false;
