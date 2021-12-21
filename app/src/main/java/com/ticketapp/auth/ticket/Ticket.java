@@ -37,11 +37,12 @@ public class Ticket {
     private final Boolean isValid = false;
     private final int remainingUses = 0;
     private final int expiryTime = 0;
+    private final Boolean demoMode = true;
     private final int waitingSecondsBetweenTwoTicketIssues = 5; // time in seconds to wait before 2nd use
     private final int MaxLimitOfTicketNumber = 50; // maximum number of allowed tickets
     private final int MaxLimitOfValidDays = 90; // maximum number of days allowed for validity
     private static Boolean formatCard = false; /// !!! WARNING !!! This variable is set true only during development, to format card. Set it false in production
-    private static String infoToShow = ""; // Use this to show messages
+    private static String infoToShow = "Tap NFC card"; // Use this to show messages
     DateFormat dateFormatter = new SimpleDateFormat("MM/dd/yyyy hh:mm");
 
 
@@ -244,7 +245,7 @@ public class Ticket {
         }
 
         // step 4.3 if not blank and MAC matches: check ticket is expired or not
-        long validityDurationInSec =  86400L * validFor; // changing days to seconds
+        long validityDurationInSec =  (demoMode ? 60L : 86400L) * validFor; // changing days to seconds
         int previousRemainingTickets = Math.max(0, counterState + ticketCount - counter);
         if(previousRemainingTickets > MaxLimitOfTicketNumber){
             // checking the safe limit
@@ -439,7 +440,7 @@ public class Ticket {
         // step 7: check the time. if expired, abort. or, if it is first use, first_use = now
         // step 7.1: in case of first use, add first_use and last_use fields and increase CNTR
         // step 7.2: check the last_time used, if within 1 minute, validate but dont increase CNTR
-        long validityDurationInMillis = 1000L * 86400L * validFor;
+        long validityDurationInMillis = 1000L * (demoMode ? 60L : 86400L) * validFor;
         long currentDateInMillis = System.currentTimeMillis();
 
         if (firstUse != null && new Date(firstUse.getTime() + validityDurationInMillis).before(new Date()) ){
